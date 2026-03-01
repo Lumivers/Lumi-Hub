@@ -70,15 +70,16 @@ QQ 等第三方 IM 平台存在封号风险，消息通道不可控。Firefly-Hu
 
 ## 通讯协议
 
-WebSocket + 强类型 JSON 自定义协议（详见 [`protocol.json`](./protocol.json)）
+WebSocket + 强类型 JSON 自定义协议（详见 [`protocol.json`](./protocol.json) 及 [`protocol_spec.md`](./protocol_spec.md)）
 
 | 类别 | 消息类型 |
 |------|---------|
-| 握手心跳 | `PING` / `PONG` / `AUTH_CONNECT` |
+| 连接管理 | `PING` / `PONG` / `CONNECT` / `DISCONNECT` |
 | 基础对话 | `CHAT_REQUEST` / `CHAT_RESPONSE` / `CHAT_STREAM_CHUNK` |
-| 安全审批 | `AUTH_REQUIRED` / `AUTH_RESPONSE` |
-| 任务状态 | `TASK_EXECUTE` / `TASK_STATUS_UPDATE` / `UNDO_REQUEST` |
-| 系统通知 | `SYSTEM_NOTIFICATION` / `ERROR_ALERT` |
+| 安全审批 | `AUTH_REQUIRED` / `AUTH_RESPONSE` / `AUTH_TIMEOUT` |
+| 任务管理 | `TASK_EXECUTE` / `TASK_STATUS_UPDATE` / `TASK_COMPLETE` / `UNDO_REQUEST` |
+| 人格管理 | `PERSONA_SWITCH` / `PERSONA_LIST` / `PERSONA_INFO` |
+| 系统通知 | `SYSTEM_NOTIFICATION` / `ERROR_ALERT` / `CACHE_CLEANUP` |
 
 ---
 
@@ -150,6 +151,7 @@ firefly-hub/
 ├── client/              # Flutter 跨平台客户端
 ├── .firefly_cache/      # 安全备份缓存（自动生成）
 ├── protocol.json        # 通讯协议定义
+├── protocol_spec.md     # 协议详细说明文档
 └── readme.md
 ```
 
