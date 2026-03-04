@@ -61,10 +61,13 @@ QQ 等第三方 IM 平台存在封号风险，消息通道不可控。Firefly-Hu
 - 支持一键撤销（Undo）
 
 ### Client — 自建聊天前端（Flutter）
-- 跨平台：Android / iOS / Windows
-- 极简对话界面，承载人格包的文本沟通与情感表达
-- Human-in-the-loop 审批弹窗：展示操作类型、目标路径、diff 预览、风险等级
-- 30 秒审批超时自动拒绝
+- 跨平台：Windows 桌面端（Android / iOS 后续支持）
+- Telegram 风格暗色主题，自动跟随系统深浅色切换
+- WebSocket 全双工通信（自动重连 + 心跳 PING/PONG）
+- 消息气泡（左=AI、右=我）+ 三点跳动“正在输入”动画
+- Enter 发送、Shift+Enter 换行
+- 可扩展字体切换（已接入 MiSans 可变字体）
+- Human-in-the-loop 审批弹窗（待实现）
 
 ---
 
@@ -130,9 +133,10 @@ ln -s ./host 你的AstrBot路径/data/plugins/firefly_hub
 |-------|------|------|------|
 | **1** | 通信基建 | WebSocket 协议 + Host 适配器 + Echo 闭环 | ✅ 完成 |
 | **2** | 接入大脑 | Host 对接 AstrBot LLM + 人格列表同步 | ✅ 完成 |
-| **3** | 接入手脚 | OpenClaw 集成 + 只读 MCP 工具 + Flutter Client | 🚧 进行中 |
-| **4** | 安全护墙 | Human-in-the-loop 审批 + `.firefly_cache` 备份回溯 + 写入类 MCP | 📋 计划 |
-| **5** | 体验打磨 | Flutter 动画优化 + 人格主题包系统 + 高级 MCP 扩展 | 📋 计划 |
+| **3** | Flutter 客户端 | Telegram 风格 UI + WebSocket 全双工 + 字体切换 + 深浅色自适应 | ✅ 完成 |
+| **4** | 接入手脚 | OpenClaw 集成 + 只读 MCP 工具 | 🚧 进行中 |
+| **5** | 安全护墙 | Human-in-the-loop 审批 + `.firefly_cache` 备份回溯 + 写入类 MCP | 📋 计划 |
+| **6** | 体验打磨 | 人格/主题切换 UI + 消息动画 + 高级 MCP 扩展 | 📋 计划 |
 
 ---
 
@@ -154,15 +158,24 @@ firefly-hub/
 │   ├── main.py              # Star 壳 + Platform 适配器入口
 │   ├── ws_server.py         # WebSocket Server
 │   ├── firefly_event.py     # 重写 send() 实现 LLM 回复转发
-│   ├── metadata.yaml        # 插件元数据
-│   └── requirements.txt     # 依赖
-├── agent/                   # OpenClaw + MCP 工具（Phase 3+）
-├── client/                  # Flutter 跨平台客户端（Phase 3+）
+│   ├── metadata.yaml        # 插件元数据 v0.2.0
+│   └── __init__.py
+├── client/                  # Flutter Windows 客户端
+│   ├── lib/
+│   │   ├── main.dart            # 入口，ThemeMode.system
+│   │   ├── theme/app_theme.dart # Telegram 风格双主题
+│   │   ├── models/message.dart  # 消息模型
+│   │   ├── services/
+│   │   │   ├── ws_service.dart  # WebSocket 服务（连接/心跳/重连）
+│   │   │   └── app_settings.dart# 全局设置（字体选择）
+│   │   └── screens/
+│   │       └── chat_screen.dart # 聊天主界面
+│   └── assets/fonts/MiSansVF.ttf  # MiSans 可变字体
+├── agent/                   # OpenClaw + MCP 工具（Phase 4+）
 ├── docs/                    # 开发笔记
 ├── protocol.json            # 通讯协议定义
-├── protocol_spec.md         # 协议说明文档
-├── test_echo.py             # 测试脚本
-├── LICENSE                  # GPL-3.0
+├── protocol_spec.md         # 协议详细说明文档
+├── test_echo.py             # Host 层测试脚本
 └── readme.md
 ```
 
