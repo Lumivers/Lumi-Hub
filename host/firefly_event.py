@@ -1,5 +1,5 @@
 """
-Firefly-Hub 自定义消息事件
+Lumi-Hub 自定义消息事件
 继承 AstrMessageEvent，重写 send() 和 send_streaming()，
 将 AstrBot 的 LLM 回复通过 WebSocket 转发回 Flutter Client。
 """
@@ -13,11 +13,11 @@ from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.message.components import Plain, Image
 
-logger = logging.getLogger("firefly_hub")
+logger = logging.getLogger("lumi_hub")
 
 
-class FireflyMessageEvent(AstrMessageEvent):
-    """Firefly-Hub 的消息事件。
+class LumiMessageEvent(AstrMessageEvent):
+    """Lumi-Hub 的消息事件。
 
     AstrBot EventBus 处理完消息后，会调用 event.send() 或 event.send_streaming()
     发送回复。我们在这里将回复转为 JSON，通过 WebSocket 发回给 Client。
@@ -51,12 +51,11 @@ class FireflyMessageEvent(AstrMessageEvent):
     async def send(self, message: MessageChain) -> None:
         """AstrBot 调用此方法发送回复。我们将其转发到 WebSocket Client。"""
         if not self._ws_server or not self._ws_session_id:
-            logger.warning("[Firefly-Hub] 无法发送回复：ws_server 或 ws_session_id 未设置")
+            logger.warning("[Lumi-Hub] 无法发送回复：ws_server 或 ws_session_id 未设置")
             return
 
         text = self._chain_to_text(message)
         if not text.strip():
-            # 空消息跳过（AstrBot 有时会发空的 chain）
             await super().send(MessageChain([]))
             return
 
@@ -73,7 +72,7 @@ class FireflyMessageEvent(AstrMessageEvent):
             },
         }
 
-        logger.info(f"[Firefly-Hub] 发送 LLM 回复 (session={self._ws_session_id}): {text[:80]}...")
+        logger.info(f"[Lumi-Hub] 发送 LLM 回复 (session={self._ws_session_id}): {text[:80]}...")
         await self._ws_server.send_to_client(self._ws_session_id, response)
         await super().send(MessageChain([]))
 
@@ -82,7 +81,7 @@ class FireflyMessageEvent(AstrMessageEvent):
     ) -> None:
         """处理流式 LLM 输出，逐块发送 CHAT_STREAM_CHUNK。"""
         if not self._ws_server or not self._ws_session_id:
-            logger.warning("[Firefly-Hub] 无法发送流式回复")
+            logger.warning("[Lumi-Hub] 无法发送流式回复")
             return
 
         msg_id = getattr(self.message_obj, "message_id", str(uuid.uuid4()))
@@ -142,5 +141,5 @@ class FireflyMessageEvent(AstrMessageEvent):
         }
         await self._ws_server.send_to_client(self._ws_session_id, final_msg)
 
-        logger.info(f"[Firefly-Hub] 流式回复完成 (session={self._ws_session_id}): {full_text[:80]}...")
+        logger.info(f"[Lumi-Hub] 流式回复完成 (session={self._ws_session_id}): {full_text[:80]}...")
         await super().send_streaming(generator, use_fallback)

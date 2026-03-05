@@ -1,8 +1,10 @@
-# 🌟 Firefly-Hub
+# 🌟 Lumi-Hub
 
 **一个替代 QQ 的自建消息前端，直接对接 AstrBot，彻底告别封号风险。**
 
-在此基础上深度集成 OpenClaw + MCP 生态，让 AstrBot 不仅能聊天，还能安全地操作你的本地文件、Git 仓库、Notion 等资源。支持可插拔人格系统，内置「流萤」人格包，用户也可自定义专属交互人格。
+在此基础上深度集成 OpenClaw + MCP 生态，让 AstrBot 不仅能聊天，还能安全地操作你的本地文件、Git 仓库、Notion 等资源。支持可插拔人格/主题包系统。
+
+[![GitHub](https://img.shields.io/badge/GitHub-Lumivers%2FLumi--Hub-blue?logo=github)](https://github.com/Lumivers/Lumi-Hub)
 
 ---
 

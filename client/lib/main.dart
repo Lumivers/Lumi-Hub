@@ -13,19 +13,19 @@ void main() {
         ChangeNotifierProvider(create: (_) => AppSettings()),
         ChangeNotifierProvider(create: (_) => WsService()..connect()),
       ],
-      child: const FireflyApp(),
+      child: const LumiApp(),
     ),
   );
 }
 
-class FireflyApp extends StatelessWidget {
-  const FireflyApp({super.key});
+class LumiApp extends StatelessWidget {
+  const LumiApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettings>();
     return MaterialApp(
-      title: 'Firefly Hub',
+      title: 'Lumi Hub',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
       theme: AppTheme.light(fontFamily: settings.fontFamily),

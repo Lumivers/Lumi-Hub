@@ -117,7 +117,7 @@ class _Sidebar extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             alignment: Alignment.centerLeft,
             child: Text(
-              'Firefly Hub',
+              'Lumi Hub',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,

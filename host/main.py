@@ -1,5 +1,5 @@
 """
-Firefly-Hub AstrBot 平台适配器
+Lumi-Hub AstrBot 平台适配器
 作为 AstrBot 的自定义消息平台，替代 QQ 对接 AstrBot。
 WebSocket Client 的消息通过此适配器进入 AstrBot 的 LLM 管道。
 """
@@ -25,36 +25,36 @@ from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.message.components import Plain
 from astrbot.core.star import Star
 
-from .ws_server import FireflyWSServer
-from .firefly_event import FireflyMessageEvent
+from .ws_server import LumiWSServer
+from .firefly_event import LumiMessageEvent
 
-logger = logging.getLogger("firefly_hub")
+logger = logging.getLogger("lumi_hub")
 
 
-class FireflyHub(Star):
+class LumiHub(Star):
     """AstrBot 插件壳。
 
     star_manager 要求 plugins 目录下必须有 Star 子类。
-    真正的逻辑在 FireflyHubAdapter (Platform) 中。
+    真正的逻辑在 LumiHubAdapter (Platform) 中。
     """
     pass
 
 
 @register_platform_adapter(
-    adapter_name="firefly_hub",
-    desc="Firefly-Hub 自建消息前端平台适配器",
-    adapter_display_name="Firefly-Hub",
+    adapter_name="lumi_hub",
+    desc="Lumi-Hub 自建消息前端平台适配器",
+    adapter_display_name="Lumi-Hub",
     default_config_tmpl={
-        "type": "firefly_hub",
+        "type": "lumi_hub",
         "enable": True,
-        "id": "firefly_hub",
+        "id": "lumi_hub",
         "ws_host": "0.0.0.0",
         "ws_port": 8765,
     },
     support_streaming_message=True,
 )
-class FireflyHubAdapter(Platform):
-    """Firefly-Hub 平台适配器。
+class LumiHubAdapter(Platform):
+    """Lumi-Hub 平台适配器。
 
     功能：
     1. 启动 WebSocket Server，接收 Flutter Client 连接
@@ -74,14 +74,14 @@ class FireflyHubAdapter(Platform):
         ws_host = platform_config.get("ws_host", "0.0.0.0")
         ws_port = platform_config.get("ws_port", 8765)
 
-        self.ws_server = FireflyWSServer(host=ws_host, port=ws_port)
+        self.ws_server = LumiWSServer(host=ws_host, port=ws_port)
         self.ws_server.on_message(self._handle_client_message)
 
         self.metadata = PlatformMetadata(
-            name="firefly_hub",
-            description="Firefly-Hub 自建消息前端",
-            id=platform_config.get("id", "firefly_hub"),
-            adapter_display_name="Firefly-Hub",
+            name="lumi_hub",
+            description="Lumi-Hub 自建消息前端",
+            id=platform_config.get("id", "lumi_hub"),
+            adapter_display_name="Lumi-Hub",
             support_streaming_message=True,
             support_proactive_message=True,
         )
@@ -99,15 +99,15 @@ class FireflyHubAdapter(Platform):
             self.status = __import__(
                 "astrbot.core.platform.platform", fromlist=["PlatformStatus"]
             ).PlatformStatus.RUNNING
-            logger.info("[Firefly-Hub] 平台适配器已启动")
+            logger.info("[Lumi-Hub] 平台适配器已启动")
             await self._shutdown_event.wait()
         except Exception as e:
-            logger.error(f"[Firefly-Hub] 平台适配器启动失败: {e}")
+            logger.error(f"[Lumi-Hub] 平台适配器启动失败: {e}")
             raise
 
     async def terminate(self) -> None:
         """关闭平台适配器。"""
-        logger.info("[Firefly-Hub] 平台适配器关闭中...")
+        logger.info("[Lumi-Hub] 平台适配器关闭中...")
         self._shutdown_event.set()
         await self.ws_server.stop()
 
@@ -164,7 +164,7 @@ class FireflyHubAdapter(Platform):
         elif msg_type == "PERSONA_LIST":
             await self._handle_persona_list(message, ws_session_id)
         else:
-            logger.warning(f"[Firefly-Hub] 未知消息类型: {msg_type}")
+            logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
 
     async def _handle_chat_request(self, message: dict, ws_session_id: str) -> None:
         """
@@ -179,7 +179,7 @@ class FireflyHubAdapter(Platform):
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         context_id = payload.get("context_id", ws_session_id)
 
-        logger.info(f"[Firefly-Hub] 收到消息 (session={ws_session_id}): {user_content}")
+        logger.info(f"[Lumi-Hub] 收到消息 (session={ws_session_id}): {user_content}")
 
         # 1. 构造 AstrBotMessage（和 WebChatAdapter 做法一致）
         abm = AstrBotMessage()
@@ -205,7 +205,7 @@ class FireflyHubAdapter(Platform):
 
         # 3. 注入 AstrBot 事件队列（EventBus 会自动处理、调 LLM、调 event.send()）
         self.commit_event(event)
-        logger.info(f"[Firefly-Hub] 事件已提交到 AstrBot 队列 (msg_id={msg_id})")
+        logger.info(f"[Lumi-Hub] 事件已提交到 AstrBot 队列 (msg_id={msg_id})")
 
     async def _handle_persona_switch(self, message: dict, ws_session_id: str) -> None:
         """处理人格切换请求。"""
@@ -213,7 +213,7 @@ class FireflyHubAdapter(Platform):
         persona_id = payload.get("persona_id", "default")
         persona_name = payload.get("persona_name", "默认")
 
-        logger.info(f"[Firefly-Hub] 切换人格: {persona_name} ({persona_id})")
+        logger.info(f"[Lumi-Hub] 切换人格: {persona_name} ({persona_id})")
 
         await self.ws_server.send_to_client(ws_session_id, {
             "message_id": message.get("message_id", str(uuid.uuid4())[:8]),
@@ -242,9 +242,9 @@ class FireflyHubAdapter(Platform):
                     "tools": p.tools,
                     "skills": p.skills,
                 })
-            logger.info(f"[Firefly-Hub] 返回 {len(persona_list)} 个人格")
+            logger.info(f"[Lumi-Hub] 返回 {len(persona_list)} 个人格")
         except Exception as e:
-            logger.error(f"[Firefly-Hub] 读取人格列表失败: {e}")
+            logger.error(f"[Lumi-Hub] 读取人格列表失败: {e}")
             persona_list = []
 
         await self.ws_server.send_to_client(ws_session_id, {
