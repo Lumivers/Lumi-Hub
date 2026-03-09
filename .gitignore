@@ -2,6 +2,7 @@
 /data/
 /host/data/
 .Lumi_cache/
+.md
 
 # Python 垃圾
 __pycache__/
@@ -23,4 +24,3 @@ venv/
 
 # 允许文档
 !README.md
-!docs/
