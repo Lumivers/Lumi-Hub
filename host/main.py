@@ -6,6 +6,8 @@ WebSocket Client 的消息通过此适配器进入 AstrBot 的 LLM 管道。
 import asyncio
 import time
 import uuid
+import json
+import os
 import logging
 from collections.abc import Coroutine
 from typing import Any
@@ -28,12 +30,16 @@ from astrbot.core.star import Star
 from .ws_server import LumiWSServer
 from .lumi_event import LumiMessageEvent
 from .database.manager import DatabaseManager
+from .mcp_manager import LumiMCPManager
 
 logger = logging.getLogger("lumi_hub")
 
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import register
+
+# 全局共享状态，用于跨类传递实例
+_lumi_shared_state = {}
 
 @register("lumi_hub", "Lumi-Hub", "Lumi-Hub Native Tools Plugin", "1.0.0")
 class LumiHub(Star):
@@ -48,6 +54,23 @@ class LumiHub(Star):
             persona_id = pm.default_persona
             persona = await pm.get_persona(persona_id)
             
+            host_dir = os.path.dirname(os.path.realpath(__file__))
+            project_root = os.path.dirname(host_dir)
+            data_dir = os.path.join(project_root, "data")
+            
+            self.mcp_manager = LumiMCPManager(data_dir=data_dir)
+            await self.mcp_manager.initialize()
+            
+            # Inject into global state so LumiHubAdapter can access it
+            _lumi_shared_state["mcp_manager"] = self.mcp_manager
+            
+            mcp_tools = await self.mcp_manager.get_all_tools()
+            mcp_prompt = ""
+            if mcp_tools:
+                mcp_prompt = "\n【外部 MCP 工具列表（必须严格匹配 Server 与 Tool 名称调用）】\n"
+                for t in mcp_tools:
+                    mcp_prompt += f"■ Server: `{t['server_name']}`, Tool: `{t['tool_name']}`\n  Desc: {t.get('description', '')}\n  Schema: {json.dumps(t.get('inputSchema', {}), ensure_ascii=False)}\n"
+            
             agent_trigger = "### LUMI_IDE_AGENT_v2 ###"
             # 采用 IDE 风格的强力指令集
             agent_prompt = (
@@ -58,27 +81,69 @@ class LumiHub(Star):
                 "2. **严禁中断**：一旦 `read_file` 成功返回，你必须立即分析并调用 `search_replace` 或 `insert_content`。严禁在读取成功后向用户汇报“我已经读到了，这是内容”，除非你的最终修改已完成。\n"
                 "3. **精准编辑**：优先使用 `search_replace`。提供待修改的一段唯一的原始代码块（SEARCH）和替换后的代码块（REPLACE）。注意缩进必须严格匹配。\n"
                 "4. **主动性**：如果你不确定文件路径，先用 `list_dir`。发现错误时，先 `read_file` 报错行号。一切以解决问题为导向，而非复读代码内容。\n"
+                "5. **MCP 工具调用**：外部工具列表见下方。若需调用，请明确使用 `call_mcp_tool`。`server_name` 和 `tool_name` 必须**完全复制**下方列表中的值，严禁自行编造（例如不能把 notion 写成 mcp-notion，不能把 notion-search 简写为 search）！`arguments_json` 必须严格遵循对应工具的 Schema。\n"
                 "########################"
+                f"{mcp_prompt}"
             )
+
             
             cleaned_prompt = persona.system_prompt
-            # 清理历史旧版指令标签（如果有）
-            for old_tag in ["### LUMI_AGENT_RULES ###", "### LUMI_IDE_AGENT_v1 ###"]:
+            # 清理历史旧版指令标签（如果有）以及当前版本的标签，确保每次启动都重新注入最新的 MCP 工具列表
+            for old_tag in ["### LUMI_AGENT_RULES ###", "### LUMI_IDE_AGENT_v1 ###", agent_trigger]:
                 if old_tag in cleaned_prompt:
                     idx = cleaned_prompt.find(old_tag)
                     cleaned_prompt = cleaned_prompt[:idx].strip()
             
-            if agent_trigger not in cleaned_prompt:
-                new_prompt = cleaned_prompt + agent_prompt
-                await pm.update_persona(persona_id, system_prompt=new_prompt)
-                logger.info(f"[Lumi-Hub] 已成功升级为人格 '{persona_id}' 注入 IDE-Style Agent 指令。")
+            new_prompt = cleaned_prompt + agent_prompt
+            await pm.update_persona(persona_id, system_prompt=new_prompt)
+            logger.info(f"[Lumi-Hub] 已成功为 '{persona_id}' 注入最新的 IDE-Style 及 MCP Agent 指令。")
         except Exception as e:
             logger.error(f"[Lumi-Hub] 增强人格失败: {e}")
+
+    async def terminate(self) -> None:
+        """插件卸载或退出时执行清理。"""
+        # MCP shutdown moved to adapter
+        pass
 
     @filter.command("test_lumi")
     async def test_lumi(self, event: AstrMessageEvent):
         '''测试 Lumi-Hub 插件是否加载成功'''
         yield event.plain_result("Lumi-Hub 原生工具插件已就绪！")
+
+    @filter.llm_tool(name="call_mcp_tool")
+    async def call_mcp_tool(self, event: AstrMessageEvent, server_name: str, tool_name: str, arguments_json: str):
+        '''调用外部 MCP Server 提供的工具。
+        Args:
+            server_name(string): 目标 MCP Server 的名称
+            tool_name(string): 要调用的工具名称
+            arguments_json(string): 传递给工具的参数，必须是合法的 JSON 字符串
+        '''
+        try:
+            arguments = json.loads(arguments_json)
+        except json.JSONDecodeError:
+            return "Error: arguments_json is not a valid JSON string."
+            
+        if hasattr(event, "wait_for_auth"):
+            approved = await event.wait_for_auth(
+                action_type="MCP_TOOL_CALL",
+                target_path=f"[{server_name}] {tool_name}",
+                description=f"调用外部 MCP 工具: {tool_name}",
+                tool_name="call_mcp_tool",
+                diff_preview=json.dumps(arguments, indent=2, ensure_ascii=False)
+            )
+            if not approved:
+                return "Error: User rejected the MCP tool call."
+                
+        if not hasattr(self, "mcp_manager"):
+            return "Error: MCP Manager not initialized."
+            
+        result = await self.mcp_manager.execute_tool(server_name, tool_name, arguments)
+        if result.get("error"):
+            return f"Error executing tool: {result.get('error')}"
+        if result.get("isError"):
+            return f"Error executing tool: {json.dumps(result.get('content', []), ensure_ascii=False)}"
+        
+        return json.dumps(result.get("content", []), ensure_ascii=False)
 
     @filter.llm_tool(name="read_file")
     async def read_file(self, event: AstrMessageEvent, path: str, start_line: int = 1, end_line: int = None):
@@ -299,6 +364,11 @@ class LumiHubAdapter(Platform):
         """关闭平台适配器。"""
         logger.info("[Lumi-Hub] 平台适配器关闭中...")
         await self.ws_server.stop()
+        
+        mcp_manager = _lumi_shared_state.get("mcp_manager")
+        if mcp_manager:
+            logger.info("[Lumi-Hub] 正在关闭 MCP Manager...")
+            await mcp_manager.shutdown()
 
     def meta(self) -> PlatformMetadata:
         """返回平台元数据。"""
@@ -370,8 +440,55 @@ class LumiHubAdapter(Platform):
             await self._handle_auth_restore(message, ws_session_id)
         elif msg_type == "HISTORY_REQUEST":
             await self._handle_history_request(message, ws_session_id)
+        elif msg_type == "MCP_CONFIG_GET":
+            await self._handle_mcp_config_get(message, ws_session_id)
+        elif msg_type == "MCP_CONFIG_UPDATE":
+            await self._handle_mcp_config_update(message, ws_session_id)
         else:
             logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
+
+    async def _handle_mcp_config_get(self, message: dict, ws_session_id: str) -> None:
+        """获取当前 MCP 配置"""
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        mcp_manager = _lumi_shared_state.get("mcp_manager")
+        
+        if mcp_manager:
+            config = mcp_manager.get_config()
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id, "type": "MCP_CONFIG_RESPONSE", "source": "host", "target": "client",
+                "payload": {"status": "success", "config": config}
+            })
+        else:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id, "type": "MCP_CONFIG_RESPONSE", "source": "host", "target": "client",
+                "payload": {"status": "error", "message": "MCP Manager not initialized"}
+            })
+
+    async def _handle_mcp_config_update(self, message: dict, ws_session_id: str) -> None:
+        """更新并热重载 MCP 配置"""
+        payload = message.get("payload", {})
+        config = payload.get("config", {})
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        
+        mcp_manager = _lumi_shared_state.get("mcp_manager")
+        if mcp_manager:
+            try:
+                await mcp_manager.update_config(config)
+                await self.ws_server.send_to_client(ws_session_id, {
+                    "message_id": msg_id, "type": "MCP_CONFIG_UPDATE_RESPONSE", "source": "host", "target": "client",
+                    "payload": {"status": "success", "message": "Config updated and servers hot-reloaded"}
+                })
+            except Exception as e:
+                logger.error(f"[Lumi-Hub] 热重载 MCP 失败: {e}")
+                await self.ws_server.send_to_client(ws_session_id, {
+                    "message_id": msg_id, "type": "MCP_CONFIG_UPDATE_RESPONSE", "source": "host", "target": "client",
+                    "payload": {"status": "error", "message": str(e)}
+                })
+        else:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id, "type": "MCP_CONFIG_UPDATE_RESPONSE", "source": "host", "target": "client",
+                "payload": {"status": "error", "message": "MCP Manager not initialized"}
+            })
 
     async def _handle_auth_register(self, message: dict, ws_session_id: str) -> None:
         payload = message.get("payload", {})

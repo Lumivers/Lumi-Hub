@@ -12,6 +12,7 @@ import '../services/app_settings.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'components/approval_dialog.dart';
+import 'mcp_settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -223,6 +224,35 @@ class _Sidebar extends StatelessWidget {
           Divider(height: 1, color: colors.divider),
           const Spacer(),
           Divider(height: 1, color: colors.divider),
+          // MCP 扩展入口
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+            child: ListTile(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              hoverColor: colors.accent.withValues(alpha: 0.1),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              leading: Icon(
+                Icons.extension_outlined,
+                color: colors.subtext,
+                size: 20,
+              ),
+              title: Text(
+                '扩展生态 (MCP)',
+                style: TextStyle(color: colors.subtext, fontSize: 13),
+              ),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const McpSettingsScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+
           // 设置入口
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),

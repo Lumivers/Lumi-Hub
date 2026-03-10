@@ -40,6 +40,12 @@ class WsService extends ChangeNotifier {
   Stream<Map<String, dynamic>> get authRequests =>
       _authRequestController.stream;
 
+  // MCP 配置流
+  final _mcpConfigController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get mcpConfigResponses =>
+      _mcpConfigController.stream;
+
   String get serverUrl => _defaultUrl;
 
   WsService() {
@@ -152,6 +158,9 @@ class WsService extends ChangeNotifier {
           _handleAuthRequired(data);
         case 'HISTORY_RESPONSE':
           _handleHistoryResponse(data);
+        case 'MCP_CONFIG_RESPONSE':
+        case 'MCP_CONFIG_UPDATE_RESPONSE':
+          _mcpConfigController.add(data);
         default:
           debugPrint('[WS] 未处理消息类型: $type');
       }
@@ -296,6 +305,28 @@ class WsService extends ChangeNotifier {
     });
   }
 
+  void getMcpConfig() {
+    if (_status != WsStatus.connected) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'MCP_CONFIG_GET',
+      'source': 'client',
+      'target': 'host',
+      'payload': {},
+    });
+  }
+
+  void updateMcpConfig(Map<String, dynamic> config) {
+    if (_status != WsStatus.connected) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'MCP_CONFIG_UPDATE',
+      'source': 'client',
+      'target': 'host',
+      'payload': {'config': config},
+    });
+  }
+
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
@@ -386,6 +417,7 @@ class WsService extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _authRequestController.close();
+    _mcpConfigController.close();
     disconnect();
     super.dispose();
   }

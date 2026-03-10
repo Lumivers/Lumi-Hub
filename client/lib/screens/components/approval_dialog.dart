@@ -27,15 +27,15 @@ class ApprovalDialog extends StatelessWidget {
         child: Container(
           constraints: const BoxConstraints(maxWidth: 500),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface.withOpacity(0.8),
+            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: Colors.white.withOpacity(0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               width: 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 30,
                 spreadRadius: 5,
               ),
@@ -52,7 +52,7 @@ class ApprovalDialog extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.amber.withOpacity(0.2),
+                        color: Colors.amber.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(Icons.security, color: Colors.amber),
@@ -96,7 +96,7 @@ class ApprovalDialog extends StatelessWidget {
                     constraints: const BoxConstraints(maxHeight: 200),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.3),
+                      color: Colors.black.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: SingleChildScrollView(
@@ -169,7 +169,7 @@ class ApprovalDialog extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
