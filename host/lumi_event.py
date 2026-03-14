@@ -6,14 +6,12 @@ Lumi-Hub 自定义消息事件
 import json
 import uuid
 import time
-import logging
 from collections.abc import AsyncGenerator
 
+from astrbot.api import logger
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.message.components import Plain, Image
-
-logger = logging.getLogger("lumi_hub")
 
 
 class LumiMessageEvent(AstrMessageEvent):

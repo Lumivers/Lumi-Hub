@@ -1,9 +1,8 @@
 import os
 import shutil
 import time
-import logging
 
-logger = logging.getLogger("astrbot")
+from astrbot.api import logger
 
 def read_file(path: str, start_line: int = 1, end_line: int = None) -> str:
     """读取本地文件内容，支持指定行范围。"""

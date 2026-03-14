@@ -1,13 +1,11 @@
 import os
 import json
-import logging
 import asyncio
 from typing import Dict, Any, List
 
+from astrbot.api import logger
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
-
-logger = logging.getLogger("lumi_hub.mcp")
 
 
 class LumiMCPManager:

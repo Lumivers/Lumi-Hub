@@ -9,6 +9,7 @@ __pycache__/
 .venv/
 venv/
 .env
+sync.py
 
 # Flutter 编译产物
 /client/build/

@@ -1,14 +1,12 @@
 import os
 import secrets
-import logging
 import hashlib
 import datetime
 from datetime import timezone
 from sqlalchemy.orm import sessionmaker
 
+from astrbot.api import logger
 from .models import init_db, User, Message
-
-logger = logging.getLogger("lumi_hub.db")
 
 class DatabaseManager:
     """管理 Lumi-Hub 的本地 SQLite 数据库操作"""

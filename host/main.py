@@ -8,7 +8,6 @@ import time
 import uuid
 import json
 import os
-import logging
 from collections.abc import Coroutine
 from typing import Any
 
@@ -32,9 +31,7 @@ from .lumi_event import LumiMessageEvent
 from .database.manager import DatabaseManager
 from .mcp_manager import LumiMCPManager
 
-logger = logging.getLogger("lumi_hub")
-
-
+from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import register, Context
 import time
@@ -366,6 +363,7 @@ class LumiHubAdapter(Platform):
     async def terminate(self) -> None:
         """关闭平台适配器。"""
         logger.info("[Lumi-Hub] 平台适配器关闭中...")
+        self._shutdown_event.set()
         await self.ws_server.stop()
         
         mcp_manager = _lumi_shared_state.get("mcp_manager")

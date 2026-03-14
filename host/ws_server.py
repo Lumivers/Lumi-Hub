@@ -6,13 +6,11 @@ import asyncio
 import json
 import uuid
 import time
-import logging
 from typing import Dict, Set, Optional, Callable, Awaitable
 
 import websockets
 from websockets.server import WebSocketServerProtocol
-
-logger = logging.getLogger("lumi_hub.ws_server")
+from astrbot.api import logger
 
 
 class LumiWSServer:
