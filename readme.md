@@ -21,8 +21,9 @@ Lumi-Hub 旨在提供一个纯净、可靠的自建通信链路。Host 端直接
 | 步骤 | 操作 |
 |------|------|
 | **① 安装 Host 插件** | 在 AstrBot WebUI 插件市场搜索 `lumi-hub-plugin` → 一键安装 |
-| **② 下载 Client 客户端** | 前往 [Releases](https://github.com/Lumivers/Lumi-Hub/releases) 下载最新 `Lumi-Hub-Windows-vX.X.X.zip`，解压后运行 `lumi_client.exe` |
-| **③ 连接** | 确保 Client 和 AstrBot 在同一网络，Client 填入 Host 的 IP 和端口即可 |
+| **② 启动 AstrBot** | 安装插件后，**必须先启动 AstrBot 本体**，Host 端服务会随之运行 |
+| **③ 下载客户端** | 前往 [Releases](https://github.com/Lumivers/Lumi-Hub/releases) 下载最新 `Lumi-Hub-Windows-vX.X.X.zip`，解压后运行 `lumi_client.exe` |
+| **④ 自动连接** | 打开客户端后会自动连接后台，端口为8765。**(⚠️ 注意：当前 Beta 阶段客户端仅支持连接本机的 AstrBot，请确保两者在同一台电脑上)** |
 
 ### 🛠️ 开发者（本地调试）
 
