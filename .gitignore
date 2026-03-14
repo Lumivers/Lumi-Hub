@@ -16,6 +16,7 @@ sync.py
 /client/.dart_tool/
 /client/.flutter-plugins
 /client/.flutter-plugins-dependencies
+*.zip
 
 # IDE 与系统
 .vscode/
