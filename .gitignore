@@ -23,6 +23,11 @@ sync.py
 .idea/
 .DS_Store
 
+# C++ 编译产物
+/cpp_launcher/build/
+/cpp_launcher/.vs/
+/cpp_launcher/out/
+
 # 允许文档
 !README.md
 !readme.md
