@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:tray_manager/tray_manager.dart';
 
 import 'package:screen_retriever/screen_retriever.dart';
 
@@ -53,17 +56,124 @@ class LumiApp extends StatefulWidget {
   State<LumiApp> createState() => _LumiAppState();
 }
 
-class _LumiAppState extends State<LumiApp> with WindowListener {
+class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
   bool _isClosing = false;
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
+  Future<void> _initTray() async {
+    if (!Platform.isWindows) return;
+    await trayManager.setIcon(
+      'windows/runner/resources/app_icon.ico',
+    ); // use the same icon as the window
+    await trayManager.setToolTip('Lumi Hub');
+    await _updateTrayMenu();
+  }
+
+  Future<void> _updateTrayMenu() async {
+    final Menu menu = Menu(
+      items: [
+        MenuItem(key: 'show_window', label: '显示窗口'),
+        MenuItem(key: 'exit_app', label: '完全退出'),
+      ],
+    );
+    await trayManager.setContextMenu(menu);
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    windowManager.show();
+    windowManager.focus();
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) async {
+    if (menuItem.key == 'show_window') {
+      await windowManager.show();
+      await windowManager.focus();
+    } else if (menuItem.key == 'exit_app') {
+      if (_isClosing) return;
+      final settings = context.read<AppSettings>();
+      final bootstrap = context.read<BootstrapService>();
+      _isClosing = true;
+      trayManager.destroy(); // hide tray immediately
+      await bootstrap.handleAppExit(
+        closeAstrBotOnExit: settings.closeAstrBotOnExit,
+      );
+      await windowManager.destroy();
+    }
+  }
+
+  Future<WindowCloseAction> _confirmCloseAction(AppSettings settings) async {
+    final dialogContext = _navigatorKey.currentContext;
+    if (dialogContext == null) {
+      // If UI tree is not ready, fallback to safe behavior.
+      return WindowCloseAction.minimize;
+    }
+
+    bool rememberChoice = false;
+    final result = await showDialog<WindowCloseAction>(
+      context: dialogContext,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('关闭 Lumi Hub'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('请选择关闭行为：最小化到托盘，或直接退出应用。'),
+                  const SizedBox(height: 12),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text('记住本次选择，后续不再询问'),
+                    value: rememberChoice,
+                    onChanged: (value) {
+                      setDialogState(() {
+                        rememberChoice = value ?? false;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pop(WindowCloseAction.minimize),
+                  child: const Text('最小化到托盘'),
+                ),
+                FilledButton(
+                  onPressed: () =>
+                      Navigator.of(context).pop(WindowCloseAction.exit),
+                  child: const Text('直接退出'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    final action = result ?? WindowCloseAction.minimize;
+    if (rememberChoice) {
+      settings.setWindowCloseAction(action);
+    }
+    return action;
+  }
 
   @override
   void initState() {
     super.initState();
     windowManager.addListener(this);
+    trayManager.addListener(this);
+    _initTray();
   }
 
   @override
   void dispose() {
+    trayManager.removeListener(this);
     windowManager.removeListener(this);
     super.dispose();
   }
@@ -71,10 +181,22 @@ class _LumiAppState extends State<LumiApp> with WindowListener {
   @override
   Future<void> onWindowClose() async {
     if (_isClosing) return;
-    _isClosing = true;
 
     final settings = context.read<AppSettings>();
     final bootstrap = context.read<BootstrapService>();
+    WindowCloseAction closeAction = settings.windowCloseAction;
+    if (closeAction == WindowCloseAction.ask) {
+      closeAction = await _confirmCloseAction(settings);
+      if (!mounted) return;
+    }
+
+    if (closeAction == WindowCloseAction.minimize) {
+      await windowManager.hide(); // Use hide to put to tray
+      return;
+    }
+
+    _isClosing = true;
+    trayManager.destroy(); // make sure tray goes away
     await bootstrap.handleAppExit(
       closeAstrBotOnExit: settings.closeAstrBotOnExit,
     );
@@ -86,6 +208,7 @@ class _LumiAppState extends State<LumiApp> with WindowListener {
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettings>();
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'Lumi Hub',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,

@@ -213,11 +213,12 @@ class _SidebarState extends State<_Sidebar> {
       if (!mounted) return;
       if (type == 'PERSONA_DELETE_RESPONSE' && status == 'success') {
         widget.ws.requestPersonaList();
-      } else if (type == 'PERSONA_CLEAR_HISTORY_RESPONSE' && status == 'success') {
+      } else if (type == 'PERSONA_CLEAR_HISTORY_RESPONSE' &&
+          status == 'success') {
         widget.ws.clearLocalMessages();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('聊天记录已清空')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('聊天记录已清空')));
       } else if (type == 'PERSONA_DELETE_RESPONSE' && status == 'error') {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -242,7 +243,10 @@ class _SidebarState extends State<_Sidebar> {
         title: const Text('清空聊天记录'),
         content: Text('确认清空与「$personaId」的所有聊天记录？此操作不可恢复。'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('清空', style: TextStyle(color: Colors.red)),
@@ -262,7 +266,10 @@ class _SidebarState extends State<_Sidebar> {
         title: const Text('删除人格'),
         content: Text('确认从 AstrBot 中删除人格「$personaId」？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除', style: TextStyle(color: Colors.red)),
@@ -307,9 +314,7 @@ class _SidebarState extends State<_Sidebar> {
             child: personas.isEmpty
                 ? Center(
                     child: Text(
-                      ws.status == WsStatus.connected
-                          ? '加载人格中...'
-                          : '未连接',
+                      ws.status == WsStatus.connected ? '加载人格中...' : '未连接',
                       style: TextStyle(color: colors.subtext, fontSize: 12),
                     ),
                   )
@@ -339,15 +344,26 @@ class _SidebarState extends State<_Sidebar> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
             child: ListTile(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
               hoverColor: colors.accent.withValues(alpha: 0.1),
               contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              leading: Icon(Icons.extension_outlined, color: colors.subtext, size: 20),
-              title: Text('扩展生态 (MCP)', style: TextStyle(color: colors.subtext, fontSize: 13)),
+              leading: Icon(
+                Icons.extension_outlined,
+                color: colors.subtext,
+                size: 20,
+              ),
+              title: Text(
+                '扩展生态 (MCP)',
+                style: TextStyle(color: colors.subtext, fontSize: 13),
+              ),
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const McpSettingsScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const McpSettingsScreen(),
+                  ),
                 );
               },
             ),
@@ -357,11 +373,20 @@ class _SidebarState extends State<_Sidebar> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
             child: ListTile(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
               hoverColor: colors.accent.withValues(alpha: 0.1),
               contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              leading: Icon(Icons.settings_outlined, color: colors.subtext, size: 20),
-              title: Text('设置', style: TextStyle(color: colors.subtext, fontSize: 13)),
+              leading: Icon(
+                Icons.settings_outlined,
+                color: colors.subtext,
+                size: 20,
+              ),
+              title: Text(
+                '设置',
+                style: TextStyle(color: colors.subtext, fontSize: 13),
+              ),
               onTap: () {
                 showDialog(
                   context: context,
@@ -422,27 +447,45 @@ class _PersonaTileState extends State<_PersonaTile> {
       items: [
         PopupMenuItem(
           onTap: widget.onTap,
-          child: Row(children: [
-            Icon(Icons.swap_horiz_rounded, size: 18, color: widget.colors.accent),
-            const SizedBox(width: 10),
-            const Text('切换到此人格'),
-          ]),
+          child: Row(
+            children: [
+              Icon(
+                Icons.swap_horiz_rounded,
+                size: 18,
+                color: widget.colors.accent,
+              ),
+              const SizedBox(width: 10),
+              const Text('切换到此人格'),
+            ],
+          ),
         ),
         PopupMenuItem(
           onTap: widget.onClearHistory,
-          child: Row(children: [
-            Icon(Icons.delete_sweep_rounded, size: 18, color: widget.colors.subtext),
-            const SizedBox(width: 10),
-            const Text('清空聊天记录'),
-          ]),
+          child: Row(
+            children: [
+              Icon(
+                Icons.delete_sweep_rounded,
+                size: 18,
+                color: widget.colors.subtext,
+              ),
+              const SizedBox(width: 10),
+              const Text('清空聊天记录'),
+            ],
+          ),
         ),
         PopupMenuItem(
           onTap: widget.onDelete,
-          child: const Row(children: [
-            Icon(Icons.person_remove_rounded, size: 18, color: Colors.redAccent),
-            SizedBox(width: 10),
-            Text('删除人格', style: TextStyle(color: Colors.redAccent)),
-          ]),
+          child: const Row(
+            children: [
+              Icon(
+                Icons.person_remove_rounded,
+                size: 18,
+                color: Colors.redAccent,
+              ),
+              SizedBox(width: 10),
+              Text('删除人格', style: TextStyle(color: Colors.redAccent)),
+            ],
+          ),
         ),
       ],
     );
@@ -461,10 +504,15 @@ class _PersonaTileState extends State<_PersonaTile> {
         color: isSelected
             ? colors.accent.withValues(alpha: 0.15)
             : _isHovered
-                ? colors.accent.withValues(alpha: 0.06)
-                : Colors.transparent,
+            ? colors.accent.withValues(alpha: 0.06)
+            : Colors.transparent,
         child: ListTile(
-          contentPadding: const EdgeInsets.only(left: 12, right: 4, top: 2, bottom: 2),
+          contentPadding: const EdgeInsets.only(
+            left: 12,
+            right: 4,
+            top: 2,
+            bottom: 2,
+          ),
           onTap: widget.onTap,
           leading: Stack(
             children: [
@@ -512,7 +560,11 @@ class _PersonaTileState extends State<_PersonaTile> {
             duration: const Duration(milliseconds: 150),
             child: Builder(
               builder: (ctx) => IconButton(
-                icon: Icon(Icons.more_vert_rounded, size: 18, color: colors.subtext),
+                icon: Icon(
+                  Icons.more_vert_rounded,
+                  size: 18,
+                  color: colors.subtext,
+                ),
                 tooltip: '更多操作',
                 onPressed: () => _showMenu(ctx),
                 splashRadius: 16,
@@ -525,10 +577,10 @@ class _PersonaTileState extends State<_PersonaTile> {
   }
 
   Color _statusColor(WsStatus s) => switch (s) {
-        WsStatus.connected => const Color(0xFF4CAF50),
-        WsStatus.connecting => const Color(0xFFFFC107),
-        WsStatus.disconnected => const Color(0xFF9E9E9E),
-      };
+    WsStatus.connected => const Color(0xFF4CAF50),
+    WsStatus.connecting => const Color(0xFFFFC107),
+    WsStatus.disconnected => const Color(0xFF9E9E9E),
+  };
 }
 
 class _SettingsDialog extends StatelessWidget {
@@ -593,87 +645,159 @@ class _SettingsDialog extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
-            // 字体设置
-            Text(
-              '界面',
-              style: TextStyle(
-                color: colors.subtext,
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
+            // 应用与系统设置
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 8),
+              child: Text(
+                '应用与系统',
+                style: TextStyle(
+                  color: colors.accent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  Icons.font_download_outlined,
-                  color: colors.subtext,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '字体',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-                const Spacer(),
-                DropdownButton<String>(
-                  value: settings.fontKey,
-                  dropdownColor: colors.inputBg,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                  underline: const SizedBox(),
-                  items: kAvailableFonts.entries
-                      .map(
-                        (e) => DropdownMenuItem(
-                          value: e.key,
-                          child: Text(e.value),
+            Container(
+              decoration: BoxDecoration(
+                color: colors.inputBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: colors.divider.withValues(alpha: 0.1)),
+              ),
+              child: Column(
+                children: [
+                  // 1. 字体
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.font_download_outlined,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      '应用字体',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    trailing: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: settings.fontKey,
+                        dropdownColor: colors.inputBg,
+                        icon: Icon(
+                          Icons.expand_more,
+                          size: 16,
+                          color: colors.subtext,
                         ),
-                      )
-                      .toList(),
-                  onChanged: (val) {
-                    if (val != null) settings.setFontFamily(val);
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  Icons.power_settings_new,
-                  color: colors.subtext,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '关闭前端时同步关闭 AstrBot',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.onSurface,
+                          fontSize: 13,
                         ),
+                        items: kAvailableFonts.entries
+                            .map(
+                              (e) => DropdownMenuItem(
+                                value: e.key,
+                                child: Text(e.value),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (val) {
+                          if (val != null) settings.setFontFamily(val);
+                        },
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        '默认关闭。建议保持关闭，避免影响你单独使用 AstrBot。',
-                        style: TextStyle(color: colors.subtext, fontSize: 12),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-                Switch(
-                  value: settings.closeAstrBotOnExit,
-                  onChanged: settings.setCloseAstrBotOnExit,
-                ),
-              ],
+                  Divider(
+                    height: 1,
+                    color: colors.divider.withValues(alpha: 0.2),
+                    indent: 48,
+                  ),
+
+                  // 2. 退出行为
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.close_fullscreen,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      '关闭窗口动作',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '点击系统关闭按钮时...',
+                      style: TextStyle(color: colors.subtext, fontSize: 12),
+                    ),
+                    trailing: DropdownButtonHideUnderline(
+                      child: DropdownButton<WindowCloseAction>(
+                        value: settings.windowCloseAction,
+                        dropdownColor: colors.inputBg,
+                        icon: Icon(
+                          Icons.expand_more,
+                          size: 16,
+                          color: colors.subtext,
+                        ),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontSize: 13,
+                        ),
+                        items: kWindowCloseActionLabels.entries
+                            .map(
+                              (e) => DropdownMenuItem(
+                                value: e.key,
+                                child: Text(e.value),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (val) {
+                          if (val != null) settings.setWindowCloseAction(val);
+                        },
+                      ),
+                    ),
+                  ),
+                  Divider(
+                    height: 1,
+                    color: colors.divider.withValues(alpha: 0.2),
+                    indent: 48,
+                  ),
+
+                  // 3. 随前端关闭 AstrBot
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.power_settings_new,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      '同步关闭 AstrBot',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '完全退出时结束核心进程',
+                      style: TextStyle(color: colors.subtext, fontSize: 12),
+                    ),
+                    trailing: Transform.scale(
+                      scale: 0.8,
+                      child: Switch(
+                        value: settings.closeAstrBotOnExit,
+                        onChanged: settings.setCloseAstrBotOnExit,
+                        activeThumbColor: colors.accent,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 24),
 
@@ -706,9 +830,6 @@ class _SettingsDialog extends StatelessWidget {
     );
   }
 }
-
-
-
 
 // ─── 顶部栏 ─────────────────────────────────────────────────────────────────
 
@@ -810,7 +931,9 @@ class _TopBar extends StatelessWidget {
             radius: 18,
             backgroundColor: colors.accent,
             child: Text(
-              activePersonaId.isNotEmpty ? activePersonaId[0].toUpperCase() : '?',
+              activePersonaId.isNotEmpty
+                  ? activePersonaId[0].toUpperCase()
+                  : '?',
               style: const TextStyle(color: Colors.white),
             ),
           ),
@@ -1362,8 +1485,8 @@ class _InputBarState extends State<_InputBar> {
                     hintText: widget.isGenerating
                         ? 'AI 回复中... (可继续输入，不可发送)'
                         : widget.enabled
-                            ? '发送消息... (Enter 发送，Shift+Enter 换行)'
-                            : '等待连接中...',
+                        ? '发送消息... (Enter 发送，Shift+Enter 换行)'
+                        : '等待连接中...',
                     hintStyle: TextStyle(
                       color: widget.colors.subtext,
                       fontSize: 13,
@@ -1380,22 +1503,26 @@ class _InputBarState extends State<_InputBar> {
           ),
           const SizedBox(width: 8),
           IconButton(
-            onPressed: widget.enabled && !widget.isGenerating ? widget.onSend : null,
-            icon: widget.isGenerating 
-              ? SizedBox(
-                  width: 18, 
-                  height: 18, 
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2, 
-                    valueColor: AlwaysStoppedAnimation<Color>(widget.colors.subtext)
+            onPressed: widget.enabled && !widget.isGenerating
+                ? widget.onSend
+                : null,
+            icon: widget.isGenerating
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        widget.colors.subtext,
+                      ),
+                    ),
                   )
-                )
-              : Icon(
-                  Icons.send_rounded,
-                  color: widget.enabled
-                      ? widget.colors.accent
-                      : widget.colors.subtext,
-                ),
+                : Icon(
+                    Icons.send_rounded,
+                    color: widget.enabled
+                        ? widget.colors.accent
+                        : widget.colors.subtext,
+                  ),
             style: IconButton.styleFrom(
               backgroundColor: widget.enabled
                   ? widget.colors.accent.withValues(alpha: 0.15)

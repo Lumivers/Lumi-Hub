@@ -4,12 +4,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 可用字体选项（key: Flutter fontFamily 名，value: 显示名）
 const Map<String, String> kAvailableFonts = {'': '系统默认', 'MiSans': 'MiSans'};
 
+enum WindowCloseAction { ask, minimize, exit }
+
+const Map<WindowCloseAction, String> kWindowCloseActionLabels = {
+  WindowCloseAction.ask: '每次询问',
+  WindowCloseAction.minimize: '默认最小化到后台',
+  WindowCloseAction.exit: '默认直接退出',
+};
+
 class AppSettings extends ChangeNotifier {
   static const String _fontKeyStorage = 'app.font_key';
   static const String _closeAstrBotOnExitStorage = 'app.close_astrbot_on_exit';
+  static const String _windowCloseActionStorage = 'app.window_close_action';
 
   String _fontFamily = 'MiSans'; // 默认使用 MiSans
   bool _closeAstrBotOnExit = false;
+  WindowCloseAction _windowCloseAction = WindowCloseAction.ask;
 
   AppSettings() {
     _load();
@@ -22,6 +32,7 @@ class AppSettings extends ChangeNotifier {
   String get fontKey => _fontFamily;
 
   bool get closeAstrBotOnExit => _closeAstrBotOnExit;
+  WindowCloseAction get windowCloseAction => _windowCloseAction;
 
   void setFontFamily(String key) {
     if (_fontFamily == key) return;
@@ -37,10 +48,23 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
+  void setWindowCloseAction(WindowCloseAction value) {
+    if (_windowCloseAction == value) return;
+    _windowCloseAction = value;
+    notifyListeners();
+    _save();
+  }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     _fontFamily = prefs.getString(_fontKeyStorage) ?? 'MiSans';
     _closeAstrBotOnExit = prefs.getBool(_closeAstrBotOnExitStorage) ?? false;
+    final closeActionRaw = prefs.getString(_windowCloseActionStorage) ?? 'ask';
+    _windowCloseAction = switch (closeActionRaw) {
+      'minimize' => WindowCloseAction.minimize,
+      'exit' => WindowCloseAction.exit,
+      _ => WindowCloseAction.ask,
+    };
     notifyListeners();
   }
 
@@ -48,5 +72,11 @@ class AppSettings extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_fontKeyStorage, _fontFamily);
     await prefs.setBool(_closeAstrBotOnExitStorage, _closeAstrBotOnExit);
+    final closeActionRaw = switch (_windowCloseAction) {
+      WindowCloseAction.ask => 'ask',
+      WindowCloseAction.minimize => 'minimize',
+      WindowCloseAction.exit => 'exit',
+    };
+    await prefs.setString(_windowCloseActionStorage, closeActionRaw);
   }
 }

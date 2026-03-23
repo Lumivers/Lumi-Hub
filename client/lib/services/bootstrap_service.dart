@@ -23,6 +23,7 @@ class BootstrapService extends ChangeNotifier {
   final WsService _ws;
   bool _startedAstrBotByHub = false;
   int? _astrBotPid;
+
   String? _logDirectoryPath;
   String? _logFilePath;
 
@@ -59,7 +60,7 @@ class BootstrapService extends ChangeNotifier {
   Future<void> start() async {
     await _ensureLogFileReady();
     _setStage(BootstrapStage.checkingEnv);
-    _log('正在初始化启动器内核...');
+    _log('正在初始化内核...');
 
     final pythonOk = await _checkPythonAvailable();
     if (!pythonOk) {
@@ -165,21 +166,25 @@ class BootstrapService extends ChangeNotifier {
       return;
     }
 
-    if (!_startedAstrBotByHub || _astrBotPid == null) {
-      _log('退出策略：未由 Hub 拉起 AstrBot，不执行关闭。');
+    if (_startedAstrBotByHub && _astrBotPid != null) {
+      await _killAstrBotByPid(_astrBotPid!);
       return;
     }
 
+    _log('退出策略：未检测到由 Hub 拉起的 AstrBot，不执行关闭。');
+  }
+
+  Future<void> _killAstrBotByPid(int pid) async {
     try {
       final result = await Process.run('taskkill', [
         '/PID',
-        _astrBotPid.toString(),
+        pid.toString(),
         '/T',
         '/F',
       ]);
 
       if (result.exitCode == 0) {
-        _log('已关闭 AstrBot（PID: $_astrBotPid）。');
+        _log('已关闭 AstrBot（PID: $pid）。');
       } else {
         _log('关闭 AstrBot 失败: ${result.stderr.toString().trim()}');
       }

@@ -37,6 +37,7 @@ dependencies:
   shared_preferences: ^2.5.4
   window_manager: ^0.5.1
   screen_retriever: ^0.2.0
+  tray_manager: ^0.5.2
 
 dev_dependencies:
   flutter_test:
