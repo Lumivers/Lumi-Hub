@@ -5,6 +5,9 @@ project(LumiLauncher VERSION 1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# 让 CMake 输出完整的编译命令供 VS Code 语法补全插件（如 clangd）使用
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 添加源文件。前期方便调试我们先用普通的 Console 程序
 # 等后续完善了，可以改成纯后台运行的 WIN32 程序 (add_executable(LumiLauncher WIN32 src/main.cpp))
 add_executable(LumiLauncher src/main.cpp src/env_checker.cpp)
