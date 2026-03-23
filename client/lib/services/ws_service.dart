@@ -65,9 +65,7 @@ class WsService extends ChangeNotifier {
   String get serverUrl => _defaultUrl;
 
   WsService() {
-    _initAuth().then((_) {
-      connect();
-    });
+    _initAuth();
   }
 
   Future<void> _initAuth() async {

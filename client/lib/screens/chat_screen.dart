@@ -641,6 +641,40 @@ class _SettingsDialog extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 14),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.power_settings_new,
+                  color: colors.subtext,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '关闭前端时同步关闭 AstrBot',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '默认关闭。建议保持关闭，避免影响你单独使用 AstrBot。',
+                        style: TextStyle(color: colors.subtext, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: settings.closeAstrBotOnExit,
+                  onChanged: settings.setCloseAstrBotOnExit,
+                ),
+              ],
+            ),
             const SizedBox(height: 24),
 
             // 注销按钮
