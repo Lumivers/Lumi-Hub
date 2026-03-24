@@ -1,11 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -29,10 +31,28 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final FocusNode _focusNode = FocusNode();
+  VoidCallback? _wsListener;
 
   bool _isSelectionMode = false;
+  bool _loadingOlder = false;
+  bool _pendingInitialBottom = true;
+  bool _bottomJumpScheduled = false;
+  int _lastMessageCount = 0;
   final Set<String> _selectedMessageIds = {};
   StreamSubscription? _authSubscription;
+  String? _pendingFileName;
+  bool _isUploadingAttachment = false;
+  double _uploadProgress = 0;
+  String? _uploadError;
+  Map<String, dynamic>? _uploadedAttachment;
+
+  String _readableUploadError(Object e) {
+    final raw = e.toString().trim();
+    if (raw.startsWith('Exception:')) {
+      return raw.substring('Exception:'.length).trim();
+    }
+    return raw;
+  }
 
   @override
   void initState() {
@@ -41,7 +61,33 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ws = context.read<WsService>();
       _authSubscription = ws.authRequests.listen(_handleAuthRequest);
+      _lastMessageCount = ws.messages.length;
+      _wsListener = () {
+        if (!mounted) return;
+        final count = ws.messages.length;
+        if (count == 0) {
+          _pendingInitialBottom = true;
+        }
+
+        final grew = count > _lastMessageCount;
+        if (grew && !_loadingOlder) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!_scroll.hasClients) return;
+            final nearBottom =
+                (_scroll.position.maxScrollExtent - _scroll.position.pixels) <
+                80;
+            if (_pendingInitialBottom || nearBottom) {
+              _scroll.jumpTo(_scroll.position.maxScrollExtent);
+              _pendingInitialBottom = false;
+            }
+          });
+        }
+
+        _lastMessageCount = count;
+      };
+      ws.addListener(_wsListener!);
     });
+    _scroll.addListener(_onScrollMaybeLoadOlder);
   }
 
   void _handleAuthRequest(Map<String, dynamic> request) {
@@ -63,6 +109,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    final ws = context.read<WsService>();
+    if (_wsListener != null) {
+      ws.removeListener(_wsListener!);
+    }
+    _scroll.removeListener(_onScrollMaybeLoadOlder);
     _authSubscription?.cancel();
     _input.dispose();
     _scroll.dispose();
@@ -70,11 +121,91 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+  void _onScrollMaybeLoadOlder() {
+    if (_loadingOlder || _isSelectionMode || !_scroll.hasClients) return;
+    if (_scroll.position.pixels <= 60) {
+      unawaited(_loadOlderMessages());
+    }
+  }
+
+  Future<void> _loadOlderMessages() async {
+    final ws = context.read<WsService>();
+    if (_loadingOlder || ws.isHistoryLoading || !ws.hasMoreHistory) return;
+    if (ws.messages.isEmpty) return;
+
+    _loadingOlder = true;
+    final beforeMax = _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
+    final beforePixels = _scroll.hasClients ? _scroll.position.pixels : 0.0;
+
+    try {
+      await ws.loadOlderHistory();
+    } finally {
+      if (!mounted) {
+        _loadingOlder = false;
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            final afterMax = _scroll.position.maxScrollExtent;
+            final delta = afterMax - beforeMax;
+            final target = (beforePixels + delta).clamp(
+              0.0,
+              _scroll.position.maxScrollExtent,
+            );
+            _scroll.jumpTo(target);
+          }
+          _loadingOlder = false;
+        });
+      }
+    }
+  }
+
+  void _ensureInitialBottomIfNeeded(WsService ws) {
+    if (!_pendingInitialBottom || _bottomJumpScheduled) return;
+    if (ws.messages.isEmpty || _loadingOlder) return;
+
+    _bottomJumpScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _bottomJumpScheduled = false;
+        return;
+      }
+
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+
+      Future<void>.delayed(const Duration(milliseconds: 30), () {
+        if (!mounted) {
+          _bottomJumpScheduled = false;
+          return;
+        }
+        if (_scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent);
+        }
+        _pendingInitialBottom = false;
+        _bottomJumpScheduled = false;
+      });
+    });
+  }
+
   void _send(WsService ws) {
+    if (_isUploadingAttachment) return;
+
     final text = _input.text.trim();
-    if (text.isEmpty) return;
-    ws.sendMessage(text);
+    final attachments = _uploadedAttachment != null
+        ? <Map<String, dynamic>>[_uploadedAttachment!]
+        : const <Map<String, dynamic>>[];
+    if (text.isEmpty && attachments.isEmpty) return;
+
+    ws.sendMessage(text, attachments: attachments);
     _input.clear();
+    setState(() {
+      _pendingFileName = null;
+      _isUploadingAttachment = false;
+      _uploadProgress = 0;
+      _uploadError = null;
+      _uploadedAttachment = null;
+    });
     _focusNode.requestFocus();
     // 滚到底部
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -121,15 +252,104 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  Future<void> _onAttach(WsService ws) async {
+    if (_isUploadingAttachment) return;
+
+    if (ws.status != WsStatus.connected) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('未连接到 Host，暂时无法上传文件')));
+      return;
+    }
+    if (!ws.isAuthenticated) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前未登录，无法上传文件')));
+      return;
+    }
+
+    final picked = await FilePicker.platform.pickFiles(
+      allowMultiple: false,
+      type: FileType.custom,
+      allowedExtensions: [
+        'png',
+        'jpg',
+        'jpeg',
+        'gif',
+        'webp',
+        'pdf',
+        'mp4',
+        'webm',
+        'mov',
+      ],
+    );
+    if (!mounted) return;
+
+    if (picked == null || picked.files.isEmpty) {
+      return;
+    }
+
+    final file = picked.files.first;
+    final filePath = file.path;
+    if (filePath == null || filePath.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('文件路径无效，上传已取消')));
+      return;
+    }
+
+    setState(() {
+      _pendingFileName = file.name;
+      _isUploadingAttachment = true;
+      _uploadProgress = 0;
+      _uploadError = null;
+      _uploadedAttachment = null;
+    });
+
+    try {
+      final attachment = await ws.uploadFile(
+        filePath,
+        onProgress: (progress) {
+          if (!mounted) return;
+          setState(() {
+            _uploadProgress = progress.clamp(0, 1);
+          });
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _uploadedAttachment = attachment;
+        _isUploadingAttachment = false;
+        _uploadProgress = 1;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      final err = _readableUploadError(e);
+      setState(() {
+        _isUploadingAttachment = false;
+        _uploadError = err;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('上传失败: $err')));
+    }
+  }
+
+  void _clearAttachmentState() {
+    setState(() {
+      _pendingFileName = null;
+      _isUploadingAttachment = false;
+      _uploadProgress = 0;
+      _uploadError = null;
+      _uploadedAttachment = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).extension<LumiColors>()!;
     final ws = context.watch<WsService>();
-
-    // 消息更新时滚到底部
-    if (!_isSelectionMode) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
-    }
+    _ensureInitialBottomIfNeeded(ws);
 
     return Scaffold(
       body: Row(
@@ -172,14 +392,140 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 Divider(height: 1, color: colors.divider),
                 // 输入区
-                _InputBar(
-                  controller: _input,
-                  focusNode: _focusNode,
-                  colors: colors,
-                  activePersonaId: ws.activePersonaId,
-                  onSend: () => _send(ws),
-                  enabled: ws.status == WsStatus.connected && !ws.isGenerating,
-                  isGenerating: ws.isGenerating,
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_pendingFileName != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.of(context).size.width * 0.62,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colors.inputBg,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: colors.divider),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.insert_drive_file_outlined,
+                                    color: colors.accent,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          _pendingFileName!,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurface,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        if (_isUploadingAttachment)
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                  child: LinearProgressIndicator(
+                                                    value: _uploadProgress,
+                                                    minHeight: 5,
+                                                    backgroundColor:
+                                                        colors.divider,
+                                                    valueColor:
+                                                        AlwaysStoppedAnimation<
+                                                          Color
+                                                        >(colors.accent),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Text(
+                                                '${(_uploadProgress * 100).toStringAsFixed(0)}%',
+                                                style: TextStyle(
+                                                  color: colors.subtext,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        else
+                                          Text(
+                                            _uploadError != null
+                                                ? '失败: $_uploadError'
+                                                : '上传完成',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: _uploadError != null
+                                                  ? Colors.redAccent
+                                                  : const Color(0xFF4CAF50),
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: _isUploadingAttachment
+                                        ? null
+                                        : _clearAttachmentState,
+                                    icon: Icon(
+                                      Icons.close_rounded,
+                                      color: colors.subtext,
+                                      size: 16,
+                                    ),
+                                    splashRadius: 14,
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 24,
+                                      minHeight: 24,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    _InputBar(
+                      controller: _input,
+                      focusNode: _focusNode,
+                      colors: colors,
+                      activePersonaId: ws.activePersonaId,
+                      onSend: () => _send(ws),
+                      onAttach: () {
+                        _onAttach(ws);
+                      },
+                      enabled:
+                          ws.status == WsStatus.connected &&
+                          !ws.isGenerating &&
+                          !_isUploadingAttachment,
+                      isGenerating: ws.isGenerating,
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -204,10 +550,65 @@ class _Sidebar extends StatefulWidget {
 
 class _SidebarState extends State<_Sidebar> {
   StreamSubscription? _personaSub;
+  List<String> _personaOrder = [];
+
+  String _personaOrderStorageKey() {
+    final uid = widget.ws.user?['id']?.toString() ?? 'guest';
+    return 'persona_order_$uid';
+  }
+
+  Future<void> _loadPersonaOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    _personaOrder = prefs.getStringList(_personaOrderStorageKey()) ?? [];
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _savePersonaOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_personaOrderStorageKey(), _personaOrder);
+  }
+
+  List<Map<String, dynamic>> _orderedPersonas(List<Map<String, dynamic>> personas) {
+    if (personas.isEmpty) return personas;
+
+    final byId = {
+      for (final p in personas) (p['id'] as String? ?? ''): p,
+    };
+
+    final ordered = <Map<String, dynamic>>[];
+    final used = <String>{};
+
+    for (final id in _personaOrder) {
+      final p = byId[id];
+      if (p != null) {
+        ordered.add(p);
+        used.add(id);
+      }
+    }
+
+    for (final p in personas) {
+      final id = p['id'] as String? ?? '';
+      if (!used.contains(id)) {
+        ordered.add(p);
+      }
+    }
+
+    final newOrder = ordered
+        .map((p) => p['id'] as String? ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (newOrder.join('|') != _personaOrder.join('|')) {
+      _personaOrder = newOrder;
+      unawaited(_savePersonaOrder());
+    }
+
+    return ordered;
+  }
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadPersonaOrder());
     // 监听人格操作响应，刷新列表
     _personaSub = widget.ws.personaResponses.listen((data) {
       final type = data['type'] as String? ?? '';
@@ -290,7 +691,7 @@ class _SidebarState extends State<_Sidebar> {
   Widget build(BuildContext context) {
     final colors = widget.colors;
     final ws = widget.ws;
-    final personas = ws.personas;
+    final personas = _orderedPersonas(ws.personas);
 
     return Container(
       width: 260,
@@ -322,7 +723,25 @@ class _SidebarState extends State<_Sidebar> {
                       style: TextStyle(color: colors.subtext, fontSize: 12),
                     ),
                   )
-                : ListView.builder(
+                : ReorderableListView.builder(
+                    buildDefaultDragHandles: false,
+                    onReorder: (oldIndex, newIndex) {
+                      if (newIndex > oldIndex) newIndex -= 1;
+                      if (oldIndex < 0 || oldIndex >= personas.length) return;
+                      if (newIndex < 0 || newIndex >= personas.length) return;
+
+                      final reordered = [...personas];
+                      final item = reordered.removeAt(oldIndex);
+                      reordered.insert(newIndex, item);
+
+                      setState(() {
+                        _personaOrder = reordered
+                            .map((p) => p['id'] as String? ?? '')
+                            .where((id) => id.isNotEmpty)
+                            .toList();
+                      });
+                      unawaited(_savePersonaOrder());
+                    },
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     itemCount: personas.length,
                     itemBuilder: (context, i) {
@@ -330,10 +749,22 @@ class _SidebarState extends State<_Sidebar> {
                       final id = p['id'] as String? ?? '';
                       final isActive = id == ws.activePersonaId;
                       return _PersonaTile(
+                        key: ValueKey('persona_$id'),
                         personaId: id,
                         isSelected: isActive,
                         colors: colors,
                         wsStatus: ws.status,
+                        dragHandle: ReorderableDragStartListener(
+                          index: i,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: Icon(
+                              Icons.drag_indicator_rounded,
+                              size: 18,
+                              color: colors.subtext,
+                            ),
+                          ),
+                        ),
                         onTap: () => ws.switchPersona(id),
                         onClearHistory: () => _confirmClearHistory(id),
                         onDelete: () => _confirmDelete(id),
@@ -413,15 +844,18 @@ class _PersonaTile extends StatefulWidget {
   final bool isSelected;
   final LumiColors colors;
   final WsStatus wsStatus;
+  final Widget? dragHandle;
   final VoidCallback onTap;
   final VoidCallback onClearHistory;
   final VoidCallback onDelete;
 
   const _PersonaTile({
+    super.key,
     required this.personaId,
     required this.isSelected,
     required this.colors,
     required this.wsStatus,
+    this.dragHandle,
     required this.onTap,
     required this.onClearHistory,
     required this.onDelete,
@@ -449,20 +883,6 @@ class _PersonaTileState extends State<_PersonaTile> {
       color: widget.colors.inputBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       items: [
-        PopupMenuItem(
-          onTap: widget.onTap,
-          child: Row(
-            children: [
-              Icon(
-                Icons.swap_horiz_rounded,
-                size: 18,
-                color: widget.colors.accent,
-              ),
-              const SizedBox(width: 10),
-              const Text('切换到此人格'),
-            ],
-          ),
-        ),
         PopupMenuItem(
           onTap: widget.onClearHistory,
           child: Row(
@@ -562,17 +982,23 @@ class _PersonaTileState extends State<_PersonaTile> {
           trailing: AnimatedOpacity(
             opacity: _isHovered || isSelected ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 150),
-            child: Builder(
-              builder: (ctx) => IconButton(
-                icon: Icon(
-                  Icons.more_vert_rounded,
-                  size: 18,
-                  color: colors.subtext,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.dragHandle != null) widget.dragHandle!,
+                Builder(
+                  builder: (ctx) => IconButton(
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      size: 18,
+                      color: colors.subtext,
+                    ),
+                    tooltip: '更多操作',
+                    onPressed: () => _showMenu(ctx),
+                    splashRadius: 16,
+                  ),
                 ),
-                tooltip: '更多操作',
-                onPressed: () => _showMenu(ctx),
-                splashRadius: 16,
-              ),
+              ],
             ),
           ),
         ),
@@ -1048,6 +1474,29 @@ class _MessageList extends StatefulWidget {
 class _MessageListState extends State<_MessageList> {
   bool _hasGlobalSelection = false;
 
+  Widget _buildListView() {
+    return ListView.builder(
+      key: const PageStorageKey<String>('chat_message_list'),
+      controller: widget.scroll,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: widget.messages.length,
+      itemBuilder: (_, i) {
+        final msg = widget.messages[i];
+        return _BubbleItem(
+          key: ValueKey<String>('msg_${msg.id}'),
+          msg: msg,
+          colors: widget.colors,
+          isSelected: widget.selectedMessageIds.contains(msg.id),
+          isSelectionMode: widget.isSelectionMode,
+          hasGlobalSelection: () => _hasGlobalSelection,
+          onToggleSelection: () => widget.onToggleSelection(msg.id),
+          onEnterSelectionMode: widget.onEnterSelectionMode,
+          onDeleteMessage: () => widget.onDeleteMessage(msg.id),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.messages.isEmpty) {
@@ -1087,31 +1536,8 @@ class _MessageListState extends State<_MessageList> {
           ],
         );
       },
-      child: ListView.builder(
-        controller: widget.scroll,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: widget.messages.length,
-        itemBuilder: (_, i) {
-          final msg = widget.messages[i];
-          return _BubbleItem(
-            msg: msg,
-            colors: widget.colors,
-            isSelected: widget.selectedMessageIds.contains(msg.id),
-            isSelectionMode: widget.isSelectionMode,
-            hasGlobalSelection: () => _hasGlobalSelection,
-            onToggleSelection: () => widget.onToggleSelection(msg.id),
-            onEnterSelectionMode: widget.onEnterSelectionMode,
-            onDeleteMessage: () => widget.onDeleteMessage(msg.id),
-          );
-        },
-      ),
+      child: _buildListView(),
     );
-
-    // Windows currently has known AXTree churn issues with complex selectable
-    // lists; exclude semantics here to avoid console flooding in desktop use.
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
-      return ExcludeSemantics(child: messageList);
-    }
 
     return messageList;
   }
@@ -1128,6 +1554,7 @@ class _BubbleItem extends StatefulWidget {
   final VoidCallback onDeleteMessage;
 
   const _BubbleItem({
+    super.key,
     required this.msg,
     required this.colors,
     this.isSelected = false,
@@ -1144,6 +1571,232 @@ class _BubbleItem extends StatefulWidget {
 
 class _BubbleItemState extends State<_BubbleItem> {
   bool _isHovered = false;
+
+  bool get _isAttachmentBubble => widget.msg.content.startsWith('[附件] ');
+  bool get _isImageBubble => widget.msg.content.startsWith('[图片] ');
+
+  String? _getAttachmentPath() {
+    if (_isImageBubble || _isAttachmentBubble) {
+      final parts = widget.msg.content
+          .replaceFirst(RegExp(r'^\[(图片|附件)\] '), '')
+          .split('|||');
+      if (parts.length == 2 && parts[0].isNotEmpty) {
+        return parts[0].trim();
+      }
+    }
+    return null;
+  }
+
+  String _getAttachmentName() {
+    if (_isImageBubble || _isAttachmentBubble) {
+      final parts = widget.msg.content
+          .replaceFirst(RegExp(r'^\[(图片|附件)\] '), '')
+          .split('|||');
+      if (parts.length == 2) {
+        return parts[1].trim();
+      }
+      return parts[0].trim();
+    }
+    return '';
+  }
+
+  String _formatBytes(dynamic sizeValue) {
+    final size = (sizeValue is num) ? sizeValue.toDouble() : 0.0;
+    if (size <= 0) return 'Unknown size';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var value = size;
+    var idx = 0;
+    while (value >= 1024 && idx < units.length - 1) {
+      value /= 1024;
+      idx++;
+    }
+    final fixed = value >= 100
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(2);
+    return '$fixed ${units[idx]}';
+  }
+
+  IconData _iconForFileName(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.pdf')) {
+      return Icons.picture_as_pdf_rounded;
+    }
+    if (lower.endsWith('.doc') || lower.endsWith('.docx')) {
+      return Icons.description_rounded;
+    }
+    if (lower.endsWith('.xls') ||
+        lower.endsWith('.xlsx') ||
+        lower.endsWith('.csv')) {
+      return Icons.table_chart_rounded;
+    }
+    if (lower.endsWith('.zip') ||
+        lower.endsWith('.rar') ||
+        lower.endsWith('.7z')) {
+      return Icons.archive_rounded;
+    }
+    return Icons.insert_drive_file_rounded;
+  }
+
+  Widget _buildFileBubble(Color textColor, String fileName, String? path) {
+    final sizeText = _formatBytes(widget.msg.extra?['size_bytes']);
+    final fileIcon = _iconForFileName(fileName);
+
+    return MouseRegion(
+      cursor: path != null
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: () {
+          if (path != null) {
+            if (Platform.isWindows) {
+              Process.run('explorer.exe', [path]);
+            } else if (Platform.isMacOS) {
+              Process.run('open', [path]);
+            } else if (Platform.isLinux) {
+              Process.run('xdg-open', [path]);
+            }
+          }
+        },
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 180, maxWidth: 320),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      fileName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      sizeText,
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.72),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.16),
+                  ),
+                ),
+                child: Icon(
+                  fileIcon,
+                  color: textColor.withValues(alpha: 0.95),
+                  size: 21,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBubbleContent(Color textColor) {
+    if (widget.msg.isTyping) {
+      return _TypingIndicator(color: textColor);
+    }
+
+    if (_isImageBubble) {
+      final path = _getAttachmentPath();
+      final fileName = _getAttachmentName();
+      if (path != null) {
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () {
+              if (Platform.isWindows) {
+                Process.run('explorer.exe', [path]);
+              } else if (Platform.isMacOS) {
+                Process.run('open', [path]);
+              } else if (Platform.isLinux) {
+                Process.run('xdg-open', [path]);
+              }
+            },
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                File(path),
+                width: 250,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    _buildFileBubble(textColor, fileName, path),
+              ),
+            ),
+          ),
+        );
+      } else {
+        return _buildFileBubble(textColor, fileName, path);
+      }
+    }
+
+    if (_isAttachmentBubble) {
+      return _buildFileBubble(
+        textColor,
+        _getAttachmentName(),
+        _getAttachmentPath(),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        MarkdownBody(
+          data: widget.msg.content,
+          selectable: false,
+          styleSheet: MarkdownStyleSheet(
+            p: TextStyle(color: textColor, fontSize: 14, height: 1.4),
+            listBullet: TextStyle(color: textColor, fontSize: 14),
+            code: TextStyle(
+              backgroundColor: Colors.black26,
+              color: textColor,
+              fontFamily: 'monospace',
+              fontSize: 13,
+            ),
+            codeblockDecoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: const Color(0xFF282C34),
+            ),
+            blockquoteDecoration: BoxDecoration(
+              color: widget.colors.sidebar.withValues(alpha: 0.5),
+              border: Border(
+                left: BorderSide(color: widget.colors.accent, width: 4),
+              ),
+            ),
+          ),
+          builders: {'code': CodeElementBuilder()},
+        ),
+      ],
+    );
+  }
 
   void _confirmDelete(BuildContext context) {
     showDialog(
@@ -1425,52 +2078,7 @@ class _BubbleItemState extends State<_BubbleItem> {
                               ),
                             ],
                           ),
-                          child: widget.msg.isTyping
-                              ? _TypingIndicator(color: textColor)
-                              : Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    MarkdownBody(
-                                      data: widget.msg.content,
-                                      selectable:
-                                          false, // Let parent SelectionArea handle selection
-                                      styleSheet: MarkdownStyleSheet(
-                                        p: TextStyle(
-                                          color: textColor,
-                                          fontSize: 14,
-                                          height: 1.4,
-                                        ),
-                                        listBullet: TextStyle(
-                                          color: textColor,
-                                          fontSize: 14,
-                                        ),
-                                        code: TextStyle(
-                                          backgroundColor: Colors.black26,
-                                          color: textColor,
-                                          fontFamily: 'monospace',
-                                          fontSize: 13,
-                                        ),
-                                        codeblockDecoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                          color: const Color(0xFF282C34),
-                                        ),
-                                        blockquoteDecoration: BoxDecoration(
-                                          color: widget.colors.sidebar
-                                              .withValues(alpha: 0.5),
-                                          border: Border(
-                                            left: BorderSide(
-                                              color: widget.colors.accent,
-                                              width: 4,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      builders: {'code': CodeElementBuilder()},
-                                    ),
-                                  ],
-                                ),
+                          child: _buildBubbleContent(textColor),
                         ),
                       ),
                       if (isMe) const SizedBox(width: 8),
@@ -1583,6 +2191,7 @@ class _InputBar extends StatefulWidget {
   final LumiColors colors;
   final String activePersonaId;
   final VoidCallback onSend;
+  final VoidCallback onAttach;
   final bool enabled;
   final bool isGenerating;
 
@@ -1592,6 +2201,7 @@ class _InputBar extends StatefulWidget {
     required this.colors,
     required this.activePersonaId,
     required this.onSend,
+    required this.onAttach,
     required this.enabled,
     required this.isGenerating,
   });
@@ -1631,9 +2241,8 @@ class _InputBarState extends State<_InputBar> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      color: Theme.of(context).scaffoldBackgroundColor,
       child: Row(
         children: [
           Expanded(
@@ -1677,6 +2286,22 @@ class _InputBarState extends State<_InputBar> {
             ),
           ),
           const SizedBox(width: 8),
+          IconButton(
+            onPressed: widget.onAttach,
+            icon: Icon(
+              Icons.attach_file_rounded,
+              color: widget.enabled
+                  ? widget.colors.accent
+                  : widget.colors.subtext,
+            ),
+            style: IconButton.styleFrom(
+              backgroundColor: widget.enabled
+                  ? widget.colors.accent.withValues(alpha: 0.15)
+                  : Colors.transparent,
+              shape: const CircleBorder(),
+            ),
+          ),
+          const SizedBox(width: 4),
           IconButton(
             onPressed: widget.enabled && !widget.isGenerating
                 ? widget.onSend

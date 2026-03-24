@@ -6,7 +6,7 @@ from datetime import timezone
 from sqlalchemy.orm import sessionmaker
 
 from astrbot.api import logger
-from .models import init_db, User, Message
+from .models import init_db, User, Message, Attachment
 
 class DatabaseManager:
     """管理 Lumi-Hub 的本地 SQLite 数据库操作"""
@@ -132,3 +132,39 @@ class DatabaseManager:
                     "timestamp": int(msg.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
                 })
             return result
+
+    # ===== 附件相关 =====
+
+    def create_attachment(
+        self,
+        user_id: int,
+        file_name: str,
+        storage_path: str,
+        mime_type: str,
+        size_bytes: int,
+        sha256: str,
+    ) -> dict:
+        """创建附件元数据记录。"""
+        with self.SessionLocal() as session:
+            att = Attachment(
+                user_id=user_id,
+                file_name=file_name,
+                storage_path=storage_path,
+                mime_type=mime_type,
+                size_bytes=size_bytes,
+                sha256=sha256,
+            )
+            session.add(att)
+            session.commit()
+            session.refresh(att)
+
+            return {
+                "id": att.id,
+                "user_id": att.user_id,
+                "file_name": att.file_name,
+                "storage_path": att.storage_path,
+                "mime_type": att.mime_type,
+                "size_bytes": att.size_bytes,
+                "sha256": att.sha256,
+                "created_at": att.created_at.isoformat(),
+            }

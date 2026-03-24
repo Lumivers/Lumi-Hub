@@ -67,6 +67,16 @@
                 ],
                 "description": "基础对话流，Client ↔ Host ↔ AstrBot"
             },
+            "file": {
+                "types": [
+                    "FILE_UPLOAD_INIT",
+                    "FILE_UPLOAD_CHUNK",
+                    "FILE_UPLOAD_COMPLETE",
+                    "FILE_UPLOAD_ACK",
+                    "FILE_UPLOAD_ERROR"
+                ],
+                "description": "文件上传分片协议（图片/PDF/视频）"
+            },
             "security": {
                 "types": [
                     "AUTH_REQUIRED",

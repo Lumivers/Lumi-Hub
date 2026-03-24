@@ -17,6 +17,7 @@ class User(Base):
 
     # 关联用户的聊天记录
     messages = relationship("Message", back_populates="user", cascade="all, delete-orphan")
+    attachments = relationship("Attachment", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(username='{self.username}')>"
@@ -44,6 +45,25 @@ class Message(Base):
 
     def __repr__(self):
         return f"<Message(role='{self.role}', type='{self.type}', len={len(self.content)})>"
+
+
+class Attachment(Base):
+    __tablename__ = 'attachments'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    file_name = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=False, default='application/octet-stream')
+    size_bytes = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    # 相对 data 目录的路径，如 uploads/user_1/2026/03/24/xxx.png
+    storage_path = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    user = relationship("User", back_populates="attachments")
+
+    def __repr__(self):
+        return f"<Attachment(name='{self.file_name}', mime='{self.mime_type}', size={self.size_bytes})>"
 
 # 数据库引擎初始化辅助函数
 def init_db(db_path: str):

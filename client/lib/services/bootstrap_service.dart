@@ -264,12 +264,10 @@ class BootstrapService extends ChangeNotifier {
 
   Future<bool> _isHostReachable() async {
     try {
-      final socket = await Socket.connect(
-        _hostAddress,
-        _hostPort,
-        timeout: const Duration(milliseconds: 500),
-      );
-      socket.destroy();
+      final ws = await WebSocket.connect(
+        'ws://$_hostAddress:$_hostPort',
+      ).timeout(const Duration(milliseconds: 800));
+      await ws.close();
       return true;
     } catch (_) {
       return false;
