@@ -66,7 +66,7 @@ class BootstrapScreen extends StatelessWidget {
                 ),
               const SizedBox(height: 16),
               Container(
-                height: 220,
+                height: 250,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   border: Border.all(color: Theme.of(context).dividerColor),
@@ -75,39 +75,49 @@ class BootstrapScreen extends StatelessWidget {
                 child: ListView.builder(
                   itemCount: bootstrap.logs.length,
                   itemBuilder: (context, index) {
+                    final log = bootstrap.logs[index];
+                    Color color;
+                    switch (log.level) {
+                      case LogLevel.error:
+                        color = Theme.of(context).colorScheme.error;
+                        break;
+                      case LogLevel.warning:
+                        color = Colors.orange;
+                        break;
+                      case LogLevel.debug:
+                        color = Colors.grey;
+                        break;
+                      case LogLevel.info:
+                        color = Theme.of(context).colorScheme.onSurfaceVariant;
+                        break;
+                    }
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 2),
                       child: Text(
-                        bootstrap.logs[index],
+                        log.toString(),
                         style: TextStyle(
                           fontFamily: 'Consolas',
                           fontSize: 12,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          color: color,
                         ),
                       ),
                     );
                   },
                 ),
               ),
-              const SizedBox(height: 8),
-              if (bootstrap.logFilePath != null)
-                Text(
-                  '日志文件: ${bootstrap.logFilePath}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: bootstrap.openLogDirectory,
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('打开日志目录'),
-                  ),
-                  const SizedBox(width: 10),
+                  if (!bootstrap.hasFailed)
+                    const Expanded(
+                      child: Text(
+                        '启动流程：环境检查 -> AstrBot 检测/拉起 -> Host 连通性确认 -> 登录',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  if (bootstrap.hasFailed)
+                    const Spacer(),
                   if (bootstrap.hasFailed)
                     FilledButton.icon(
                       onPressed: bootstrap.retry,
@@ -116,12 +126,6 @@ class BootstrapScreen extends StatelessWidget {
                     ),
                 ],
               ),
-              if (!bootstrap.hasFailed)
-                const Text(
-                  '启动流程：环境检查 -> AstrBot 检测/拉起 -> Host 连通性确认 -> 登录',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12),
-                ),
             ],
           ),
         ),

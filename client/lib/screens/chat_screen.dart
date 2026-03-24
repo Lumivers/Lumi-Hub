@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -9,6 +12,7 @@ import 'package:markdown/markdown.dart' as md;
 
 import '../models/message.dart';
 import '../services/app_settings.dart';
+import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'components/approval_dialog.dart';
@@ -592,6 +596,7 @@ class _SettingsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettings>();
+    final bootstrap = context.read<BootstrapService>();
     final user = ws.user;
 
     return AlertDialog(
@@ -663,7 +668,9 @@ class _SettingsDialog extends StatelessWidget {
               decoration: BoxDecoration(
                 color: colors.inputBg,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: colors.divider.withValues(alpha: 0.1)),
+                border: Border.all(
+                  color: colors.divider.withValues(alpha: 0.1),
+                ),
               ),
               child: Column(
                 children: [
@@ -795,6 +802,40 @@ class _SettingsDialog extends StatelessWidget {
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
+                  ),
+                  Divider(
+                    height: 1,
+                    color: colors.divider.withValues(alpha: 0.2),
+                    indent: 48,
+                  ),
+
+                  // 4. 打开日志目录
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.folder_open,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      '打开日志目录',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    subtitle: Text(
+                      bootstrap.logDirectoryPath ?? '日志目录尚未初始化',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: colors.subtext, fontSize: 12),
+                    ),
+                    trailing: Icon(
+                      Icons.open_in_new,
+                      color: colors.subtext,
+                      size: 16,
+                    ),
+                    onTap: bootstrap.openLogDirectory,
                   ),
                 ],
               ),
@@ -977,7 +1018,7 @@ class _TopBar extends StatelessWidget {
 
 // ─── 消息列表 ────────────────────────────────────────────────────────────────
 
-class _MessageList extends StatelessWidget {
+class _MessageList extends StatefulWidget {
   final List<ChatMessage> messages;
   final String activePersonaId;
   final ScrollController scroll;
@@ -1001,35 +1042,78 @@ class _MessageList extends StatelessWidget {
   });
 
   @override
+  State<_MessageList> createState() => _MessageListState();
+}
+
+class _MessageListState extends State<_MessageList> {
+  bool _hasGlobalSelection = false;
+
+  @override
   Widget build(BuildContext context) {
-    if (messages.isEmpty) {
-      final text = activePersonaId.isNotEmpty
-          ? '向 $activePersonaId 发送第一条消息吧 ✨'
+    if (widget.messages.isEmpty) {
+      final text = widget.activePersonaId.isNotEmpty
+          ? '向 ${widget.activePersonaId} 发送第一条消息吧 ✨'
           : '请先在侧边栏选择一个人格';
       return Center(
-        child: Text(text, style: TextStyle(color: colors.subtext)),
+        child: Text(text, style: TextStyle(color: widget.colors.subtext)),
       );
     }
 
-    return SelectionArea(
+    final messageList = SelectionArea(
+      onSelectionChanged: (content) {
+        _hasGlobalSelection = content != null && content.plainText.isNotEmpty;
+      },
+      contextMenuBuilder: (context, selectableRegionState) {
+        final hasCopy = selectableRegionState.contextMenuButtonItems.any(
+          (b) => b.type == ContextMenuButtonType.copy,
+        );
+
+        if (!hasCopy) {
+          // 如果未选中文本，不显示系统复制等默认菜单（返回空）
+          return const SizedBox.shrink();
+        }
+
+        final copyItem = selectableRegionState.contextMenuButtonItems
+            .firstWhere((b) => b.type == ContextMenuButtonType.copy);
+
+        return AdaptiveTextSelectionToolbar.buttonItems(
+          anchors: selectableRegionState.contextMenuAnchors,
+          buttonItems: [
+            ContextMenuButtonItem(
+              onPressed: copyItem.onPressed,
+              type: ContextMenuButtonType.copy,
+              label: '复制',
+            ),
+          ],
+        );
+      },
       child: ListView.builder(
-        controller: scroll,
+        controller: widget.scroll,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: messages.length,
+        itemCount: widget.messages.length,
         itemBuilder: (_, i) {
-          final msg = messages[i];
+          final msg = widget.messages[i];
           return _BubbleItem(
             msg: msg,
-            colors: colors,
-            isSelected: selectedMessageIds.contains(msg.id),
-            isSelectionMode: isSelectionMode,
-            onToggleSelection: () => onToggleSelection(msg.id),
-            onEnterSelectionMode: onEnterSelectionMode,
-            onDeleteMessage: () => onDeleteMessage(msg.id),
+            colors: widget.colors,
+            isSelected: widget.selectedMessageIds.contains(msg.id),
+            isSelectionMode: widget.isSelectionMode,
+            hasGlobalSelection: () => _hasGlobalSelection,
+            onToggleSelection: () => widget.onToggleSelection(msg.id),
+            onEnterSelectionMode: widget.onEnterSelectionMode,
+            onDeleteMessage: () => widget.onDeleteMessage(msg.id),
           );
         },
       ),
     );
+
+    // Windows currently has known AXTree churn issues with complex selectable
+    // lists; exclude semantics here to avoid console flooding in desktop use.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      return ExcludeSemantics(child: messageList);
+    }
+
+    return messageList;
   }
 }
 
@@ -1038,6 +1122,7 @@ class _BubbleItem extends StatefulWidget {
   final LumiColors colors;
   final bool isSelected;
   final bool isSelectionMode;
+  final bool Function() hasGlobalSelection;
   final VoidCallback onToggleSelection;
   final VoidCallback onEnterSelectionMode;
   final VoidCallback onDeleteMessage;
@@ -1047,6 +1132,7 @@ class _BubbleItem extends StatefulWidget {
     required this.colors,
     this.isSelected = false,
     this.isSelectionMode = false,
+    required this.hasGlobalSelection,
     required this.onToggleSelection,
     required this.onEnterSelectionMode,
     required this.onDeleteMessage,
@@ -1059,93 +1145,174 @@ class _BubbleItem extends StatefulWidget {
 class _BubbleItemState extends State<_BubbleItem> {
   bool _isHovered = false;
 
-  void _showContextMenu(BuildContext context) {
-    if (widget.msg.isTyping) return;
-    showModalBottomSheet(
+  void _confirmDelete(BuildContext context) {
+    showDialog(
       context: context,
-      backgroundColor: widget.colors.sidebar,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: Icon(
-                  Icons.copy,
-                  color: Theme.of(context).iconTheme.color,
-                ),
-                title: const Text('复制'),
-                onTap: () async {
-                  await Clipboard.setData(
-                    ClipboardData(text: widget.msg.content),
-                  );
-                  if (context.mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('已复制到剪贴板'),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  }
-                },
-              ),
-              ListTile(
-                leading: Icon(
-                  Icons.checklist,
-                  color: Theme.of(context).iconTheme.color,
-                ),
-                title: const Text('多选'),
-                onTap: () {
-                  Navigator.pop(context);
-                  widget.onEnterSelectionMode();
-                  widget.onToggleSelection(); // Also select the current item
-                },
-              ),
-              ListTile(
-                leading: const Icon(
-                  Icons.delete_outline,
-                  color: Colors.redAccent,
-                ),
-                title: const Text(
-                  '删除',
-                  style: TextStyle(color: Colors.redAccent),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  showDialog(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('删除消息'),
-                      content: const Text('确定要在本地删除这条消息吗？'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('取消'),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            widget.onDeleteMessage();
-                          },
-                          child: const Text(
-                            '删除',
-                            style: TextStyle(color: Colors.red),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ],
+      builder: (context) => AlertDialog(
+        title: const Text('删除消息'),
+        content: const Text('确定要在本地删除这条消息吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
           ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              widget.onDeleteMessage();
+            },
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDesktopMenu(BuildContext context, Offset position) async {
+    if (widget.msg.isTyping) return;
+
+    final value = await showGeneralDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'message_context_menu',
+      barrierColor: Colors.transparent,
+      transitionDuration: Duration.zero,
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final size = MediaQuery.of(dialogContext).size;
+        const menuWidth = 156.0;
+        const menuHeight = 134.0;
+        const screenPadding = 8.0;
+        final left = position.dx
+            .clamp(screenPadding, size.width - menuWidth - screenPadding)
+            .toDouble();
+        final top = position.dy
+            .clamp(screenPadding, size.height - menuHeight - screenPadding)
+            .toDouble();
+
+        Widget menuItem({
+          required String value,
+          required IconData icon,
+          required String text,
+          Color? color,
+          BorderRadius? radius,
+        }) {
+          final fg = color ?? Theme.of(context).iconTheme.color;
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: radius,
+              onTap: () => Navigator.of(dialogContext).pop(value),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Icon(icon, color: fg, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      text,
+                      style: TextStyle(
+                        color: fg,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => Navigator.of(dialogContext).maybePop(),
+              ),
+            ),
+            Positioned(
+              left: left,
+              top: top,
+              width: menuWidth,
+              child: Material(
+                color: Colors.transparent,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: widget.colors.sidebar.withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.16),
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          menuItem(
+                            value: 'copy',
+                            icon: Icons.copy,
+                            text: '复制',
+                            radius: const BorderRadius.only(
+                              topLeft: Radius.circular(14),
+                              topRight: Radius.circular(14),
+                            ),
+                          ),
+                          menuItem(
+                            value: 'select',
+                            icon: Icons.checklist,
+                            text: '多选',
+                          ),
+                          Divider(
+                            height: 1,
+                            thickness: 1,
+                            color: Colors.white.withValues(alpha: 0.24),
+                          ),
+                          menuItem(
+                            value: 'delete',
+                            icon: Icons.delete_outline,
+                            text: '删除',
+                            color: Colors.redAccent,
+                            radius: const BorderRadius.only(
+                              bottomLeft: Radius.circular(14),
+                              bottomRight: Radius.circular(14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
+
+    if (!context.mounted) return;
+
+    if (value == 'copy') {
+      await Clipboard.setData(ClipboardData(text: widget.msg.content));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已复制到剪贴板'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } else if (value == 'select') {
+      widget.onEnterSelectionMode();
+      widget.onToggleSelection();
+    } else if (value == 'delete') {
+      _confirmDelete(context);
+    }
   }
 
   @override
@@ -1190,128 +1357,136 @@ class _BubbleItemState extends State<_BubbleItem> {
                 ),
               ),
             ),
-            GestureDetector(
-              onLongPress: widget.isSelectionMode
-                  ? null
-                  : () => _showContextMenu(context),
-              onTap: widget.isSelectionMode ? widget.onToggleSelection : null,
-              child: Container(
-                color: widget.isSelected
-                    ? widget.colors.accent.withValues(alpha: 0.15)
-                    : Colors.transparent,
-                child: Row(
-                  mainAxisAlignment: isMe
-                      ? MainAxisAlignment.end
-                      : MainAxisAlignment.start,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (widget.isSelectionMode && !isMe)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8, bottom: 8),
-                        child: AbsorbPointer(
-                          child: Checkbox(
-                            value: widget.isSelected,
-                            onChanged: (_) {},
-                            activeColor: widget.colors.accent,
-                          ),
-                        ),
-                      ),
-                    if (!isMe) ...[
-                      CircleAvatar(
-                        radius: 16,
-                        backgroundColor: widget.colors.accent,
-                        child: const Text(
-                          '流',
-                          style: TextStyle(color: Colors.white, fontSize: 12),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    Flexible(
-                      child: Container(
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.55,
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: bubbleColor,
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(16),
-                            topRight: const Radius.circular(16),
-                            bottomLeft: Radius.circular(isMe ? 16 : 4),
-                            bottomRight: Radius.circular(isMe ? 4 : 16),
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.08),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
+            Listener(
+              onPointerDown: (event) {
+                if (event.kind == PointerDeviceKind.mouse &&
+                    event.buttons == kSecondaryMouseButton &&
+                    !widget.isSelectionMode &&
+                    !widget.hasGlobalSelection()) {
+                  _showDesktopMenu(context, event.position);
+                }
+              },
+              child: GestureDetector(
+                onTap: widget.isSelectionMode ? widget.onToggleSelection : null,
+                child: Container(
+                  color: widget.isSelected
+                      ? widget.colors.accent.withValues(alpha: 0.15)
+                      : Colors.transparent,
+                  child: Row(
+                    mainAxisAlignment: isMe
+                        ? MainAxisAlignment.end
+                        : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (widget.isSelectionMode && !isMe)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8, bottom: 8),
+                          child: AbsorbPointer(
+                            child: Checkbox(
+                              value: widget.isSelected,
+                              onChanged: (_) {},
+                              activeColor: widget.colors.accent,
                             ),
-                          ],
+                          ),
                         ),
-                        child: widget.msg.isTyping
-                            ? _TypingIndicator(color: textColor)
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  MarkdownBody(
-                                    data: widget.msg.content,
-                                    selectable:
-                                        false, // Let parent SelectionArea handle selection
-                                    styleSheet: MarkdownStyleSheet(
-                                      p: TextStyle(
-                                        color: textColor,
-                                        fontSize: 14,
-                                        height: 1.4,
-                                      ),
-                                      listBullet: TextStyle(
-                                        color: textColor,
-                                        fontSize: 14,
-                                      ),
-                                      code: TextStyle(
-                                        backgroundColor: Colors.black26,
-                                        color: textColor,
-                                        fontFamily: 'monospace',
-                                        fontSize: 13,
-                                      ),
-                                      codeblockDecoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(8),
-                                        color: const Color(0xFF282C34),
-                                      ),
-                                      blockquoteDecoration: BoxDecoration(
-                                        color: widget.colors.sidebar.withValues(
-                                          alpha: 0.5,
+                      if (!isMe) ...[
+                        CircleAvatar(
+                          radius: 16,
+                          backgroundColor: widget.colors.accent,
+                          child: const Text(
+                            '流',
+                            style: TextStyle(color: Colors.white, fontSize: 12),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Flexible(
+                        child: Container(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.55,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: bubbleColor,
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(16),
+                              topRight: const Radius.circular(16),
+                              bottomLeft: Radius.circular(isMe ? 16 : 4),
+                              bottomRight: Radius.circular(isMe ? 4 : 16),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.08),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: widget.msg.isTyping
+                              ? _TypingIndicator(color: textColor)
+                              : Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    MarkdownBody(
+                                      data: widget.msg.content,
+                                      selectable:
+                                          false, // Let parent SelectionArea handle selection
+                                      styleSheet: MarkdownStyleSheet(
+                                        p: TextStyle(
+                                          color: textColor,
+                                          fontSize: 14,
+                                          height: 1.4,
                                         ),
-                                        border: Border(
-                                          left: BorderSide(
-                                            color: widget.colors.accent,
-                                            width: 4,
+                                        listBullet: TextStyle(
+                                          color: textColor,
+                                          fontSize: 14,
+                                        ),
+                                        code: TextStyle(
+                                          backgroundColor: Colors.black26,
+                                          color: textColor,
+                                          fontFamily: 'monospace',
+                                          fontSize: 13,
+                                        ),
+                                        codeblockDecoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          color: const Color(0xFF282C34),
+                                        ),
+                                        blockquoteDecoration: BoxDecoration(
+                                          color: widget.colors.sidebar
+                                              .withValues(alpha: 0.5),
+                                          border: Border(
+                                            left: BorderSide(
+                                              color: widget.colors.accent,
+                                              width: 4,
+                                            ),
                                           ),
                                         ),
                                       ),
+                                      builders: {'code': CodeElementBuilder()},
                                     ),
-                                    builders: {'code': CodeElementBuilder()},
-                                  ),
-                                ],
-                              ),
-                      ),
-                    ),
-                    if (isMe) const SizedBox(width: 8),
-                    if (widget.isSelectionMode && isMe)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 8, bottom: 8),
-                        child: AbsorbPointer(
-                          child: Checkbox(
-                            value: widget.isSelected,
-                            onChanged: (_) {},
-                            activeColor: widget.colors.accent,
-                          ),
+                                  ],
+                                ),
                         ),
                       ),
-                  ],
+                      if (isMe) const SizedBox(width: 8),
+                      if (widget.isSelectionMode && isMe)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8, bottom: 8),
+                          child: AbsorbPointer(
+                            child: Checkbox(
+                              value: widget.isSelected,
+                              onChanged: (_) {},
+                              activeColor: widget.colors.accent,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -16,6 +16,40 @@ enum BootstrapStage {
   failed,
 }
 
+enum LogLevel {
+  info,
+  debug,
+  warning,
+  error,
+}
+
+class LogEntry {
+  final DateTime time;
+  final LogLevel level;
+  final String message;
+
+  LogEntry(this.time, this.level, this.message);
+
+  String get timeString {
+    final hh = time.hour.toString().padLeft(2, '0');
+    final mm = time.minute.toString().padLeft(2, '0');
+    final ss = time.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+
+  String get levelString {
+    switch (level) {
+      case LogLevel.info: return 'INFO';
+      case LogLevel.debug: return 'DEBUG';
+      case LogLevel.warning: return 'WARN';
+      case LogLevel.error: return 'ERROR';
+    }
+  }
+
+  @override
+  String toString() => '[$levelString] [$timeString] $message';
+}
+
 class BootstrapService extends ChangeNotifier {
   static const int _hostPort = 8765;
   static const String _hostAddress = '127.0.0.1';
@@ -30,8 +64,8 @@ class BootstrapService extends ChangeNotifier {
   BootstrapStage _stage = BootstrapStage.init;
   BootstrapStage get stage => _stage;
 
-  final List<String> _logs = [];
-  List<String> get logs => List.unmodifiable(_logs);
+  final List<LogEntry> _logs = [];
+  List<LogEntry> get logs => List.unmodifiable(_logs);
   String? get logDirectoryPath => _logDirectoryPath;
   String? get logFilePath => _logFilePath;
 
@@ -123,14 +157,14 @@ class BootstrapService extends ChangeNotifier {
         return true;
       }
 
-      _log('Python 检测失败，退出码: ${result.exitCode}');
+      _log('Python 检测失败，退出码: ${result.exitCode}', level: LogLevel.error);
       final err = result.stderr.toString().trim();
       if (err.isNotEmpty) {
-        _log('Python 错误输出: $err');
+        _log('Python 错误输出: $err', level: LogLevel.error);
       }
       return false;
     } catch (_) {
-      _log('Python 检测异常：无法执行 python --version');
+      _log('Python 检测异常：无法执行 python --version', level: LogLevel.error);
       return false;
     }
   }
@@ -138,7 +172,7 @@ class BootstrapService extends ChangeNotifier {
   Future<bool> _startAstrBot() async {
     final mainFile = File('$astrbotRoot\\main.py');
     if (!await mainFile.exists()) {
-      _log('未找到 AstrBot 启动文件: ${mainFile.path}');
+      _log('未找到 AstrBot 启动文件: ${mainFile.path}', level: LogLevel.error);
       return false;
     }
 
@@ -151,11 +185,11 @@ class BootstrapService extends ChangeNotifier {
       );
       _startedAstrBotByHub = true;
       _astrBotPid = process.pid;
-      _log('已发出启动命令: python main.py');
-      _log('AstrBot 进程 PID: ${process.pid}');
+      _log('已发出启动命令: python main.py', level: LogLevel.debug);
+      _log('AstrBot 进程 PID: ${process.pid}', level: LogLevel.debug);
       return true;
     } catch (e) {
-      _log('启动 AstrBot 异常: $e');
+      _log('启动 AstrBot 异常: $e', level: LogLevel.error);
       return false;
     }
   }
@@ -186,23 +220,23 @@ class BootstrapService extends ChangeNotifier {
       if (result.exitCode == 0) {
         _log('已关闭 AstrBot（PID: $pid）。');
       } else {
-        _log('关闭 AstrBot 失败: ${result.stderr.toString().trim()}');
+        _log('关闭 AstrBot 失败: ${result.stderr.toString().trim()}', level: LogLevel.error);
       }
     } catch (e) {
-      _log('关闭 AstrBot 异常: $e');
+      _log('关闭 AstrBot 异常: $e', level: LogLevel.error);
     }
   }
 
   Future<void> openLogDirectory() async {
     if (_logDirectoryPath == null || _logDirectoryPath!.isEmpty) {
-      _log('日志目录尚未初始化，无法打开。');
+      _log('日志目录尚未初始化，无法打开。', level: LogLevel.warning);
       return;
     }
 
     try {
       await Process.start('explorer', [_logDirectoryPath!]);
     } catch (e) {
-      _log('打开日志目录失败: $e');
+      _log('打开日志目录失败: $e', level: LogLevel.error);
     }
   }
 
@@ -247,25 +281,21 @@ class BootstrapService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _log(String message) {
-    final now = DateTime.now();
-    final hh = now.hour.toString().padLeft(2, '0');
-    final mm = now.minute.toString().padLeft(2, '0');
-    final ss = now.second.toString().padLeft(2, '0');
-    final line = '[$hh:$mm:$ss] $message';
-    _logs.add(line);
-    if (_logs.length > 20) {
+  void _log(String message, {LogLevel level = LogLevel.info}) {
+    final entry = LogEntry(DateTime.now(), level, message);
+    _logs.add(entry);
+    if (_logs.length > 30) { // Keep a bit more logs for better debugging
       _logs.removeAt(0);
     }
-    unawaited(_appendLogLine(line));
+    unawaited(_appendLogLine(entry.toString()));
     notifyListeners();
   }
 
   void _fail(String message) {
     _error = message;
-    _log('启动失败: $message');
+    _log('启动失败: $message', level: LogLevel.error);
     if (_logFilePath != null) {
-      _log('详细日志文件: $_logFilePath');
+      _log('详细日志文件: $_logFilePath', level: LogLevel.info);
     }
     _stage = BootstrapStage.failed;
     notifyListeners();
@@ -286,7 +316,10 @@ class BootstrapService extends ChangeNotifier {
     await dir.create(recursive: true);
 
     _logDirectoryPath = dir.path;
-    _logFilePath = '${dir.path}\\launcher.log';
+    
+    final now = DateTime.now();
+    final dateStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    _logFilePath = '${dir.path}\\launcher_$dateStr.log';
 
     final file = File(_logFilePath!);
     if (!await file.exists()) {
