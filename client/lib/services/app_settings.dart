@@ -16,10 +16,12 @@ class AppSettings extends ChangeNotifier {
   static const String _fontKeyStorage = 'app.font_key';
   static const String _closeAstrBotOnExitStorage = 'app.close_astrbot_on_exit';
   static const String _windowCloseActionStorage = 'app.window_close_action';
+  static const String _remoteClientModeStorage = 'app.remote_client_mode';
 
   String _fontFamily = 'MiSans'; // 默认使用 MiSans
   bool _closeAstrBotOnExit = false;
   WindowCloseAction _windowCloseAction = WindowCloseAction.ask;
+  bool _remoteClientMode = false;
 
   AppSettings() {
     _load();
@@ -33,6 +35,7 @@ class AppSettings extends ChangeNotifier {
 
   bool get closeAstrBotOnExit => _closeAstrBotOnExit;
   WindowCloseAction get windowCloseAction => _windowCloseAction;
+  bool get remoteClientMode => _remoteClientMode;
 
   void setFontFamily(String key) {
     if (_fontFamily == key) return;
@@ -55,6 +58,13 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
+  void setRemoteClientMode(bool value) {
+    if (_remoteClientMode == value) return;
+    _remoteClientMode = value;
+    notifyListeners();
+    _save();
+  }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     _fontFamily = prefs.getString(_fontKeyStorage) ?? 'MiSans';
@@ -65,6 +75,11 @@ class AppSettings extends ChangeNotifier {
       'exit' => WindowCloseAction.exit,
       _ => WindowCloseAction.ask,
     };
+    final mobileDefault = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    _remoteClientMode =
+        prefs.getBool(_remoteClientModeStorage) ?? mobileDefault;
     notifyListeners();
   }
 
@@ -78,5 +93,6 @@ class AppSettings extends ChangeNotifier {
       WindowCloseAction.exit => 'exit',
     };
     await prefs.setString(_windowCloseActionStorage, closeActionRaw);
+    await prefs.setBool(_remoteClientModeStorage, _remoteClientMode);
   }
 }

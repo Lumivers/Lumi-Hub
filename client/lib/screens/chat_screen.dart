@@ -1019,6 +1019,125 @@ class _SettingsDialog extends StatelessWidget {
 
   const _SettingsDialog({required this.ws, required this.colors});
 
+  Future<void> _showServerUrlEditor(BuildContext context) async {
+    final controller = TextEditingController(text: ws.serverUrl);
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Host 地址'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        labelText: 'WebSocket 地址',
+                        hintText: 'ws://127.0.0.1:8765 或 192.168.1.10:8765',
+                        errorText: errorText,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '留空将恢复默认地址 ws://127.0.0.1:8765',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).hintColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    try {
+                      await ws.setServerUrl(controller.text);
+                      if (dialogContext.mounted) {
+                        Navigator.of(dialogContext).pop();
+                      }
+                    } on FormatException catch (e) {
+                      setState(() {
+                        errorText = e.message;
+                      });
+                    }
+                  },
+                  child: const Text('保存'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showAccessKeyEditor(BuildContext context) async {
+    final controller = TextEditingController(text: ws.accessKey);
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('接入密钥'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Access Key',
+                    hintText: '为空表示不发送密钥',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '该密钥仅保存在本机，用于 CONNECT 握手校验。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).hintColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await ws.setAccessKey(controller.text);
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettings>();
@@ -1235,7 +1354,42 @@ class _SettingsDialog extends StatelessWidget {
                     indent: 48,
                   ),
 
-                  // 4. 打开日志目录
+                  // 4. 远程连接模式
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.wifi_tethering,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      '远程连接模式',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '跳过本机 Host 拉起，仅连接已配置地址',
+                      style: TextStyle(color: colors.subtext, fontSize: 12),
+                    ),
+                    trailing: Transform.scale(
+                      scale: 0.8,
+                      child: Switch(
+                        value: settings.remoteClientMode,
+                        onChanged: settings.setRemoteClientMode,
+                        activeThumbColor: colors.accent,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                  Divider(
+                    height: 1,
+                    color: colors.divider.withValues(alpha: 0.2),
+                    indent: 48,
+                  ),
+
+                  // 5. 打开日志目录
                   ListTile(
                     contentPadding: const EdgeInsets.only(left: 16, right: 8),
                     leading: Icon(
@@ -1262,6 +1416,74 @@ class _SettingsDialog extends StatelessWidget {
                       size: 16,
                     ),
                     onTap: bootstrap.openLogDirectory,
+                  ),
+                  Divider(
+                    height: 1,
+                    color: colors.divider.withValues(alpha: 0.2),
+                    indent: 48,
+                  ),
+
+                  // 6. Host 地址
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.dns_outlined,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      'Host 地址',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    subtitle: Text(
+                      ws.serverUrl,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: colors.subtext, fontSize: 12),
+                    ),
+                    trailing: Icon(
+                      Icons.edit,
+                      color: colors.subtext,
+                      size: 16,
+                    ),
+                    onTap: () => _showServerUrlEditor(context),
+                  ),
+                  Divider(
+                    height: 1,
+                    color: colors.divider.withValues(alpha: 0.2),
+                    indent: 48,
+                  ),
+
+                  // 7. 接入密钥
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                    leading: Icon(
+                      Icons.vpn_key_outlined,
+                      color: colors.subtext,
+                      size: 20,
+                    ),
+                    title: Text(
+                      '接入密钥',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    subtitle: Text(
+                      ws.accessKey.isEmpty ? '未设置' : '已设置（已隐藏）',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: colors.subtext, fontSize: 12),
+                    ),
+                    trailing: Icon(
+                      Icons.edit,
+                      color: colors.subtext,
+                      size: 16,
+                    ),
+                    onTap: () => _showAccessKeyEditor(context),
                   ),
                 ],
               ),

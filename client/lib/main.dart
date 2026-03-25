@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -18,30 +19,39 @@ import 'theme/app_theme.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await windowManager.ensureInitialized();
+  if (!kIsWeb && Platform.isWindows) {
+    await windowManager.ensureInitialized();
 
-  Display primaryDisplay = await screenRetriever.getPrimaryDisplay();
-  Size screenSize = primaryDisplay.size;
-  Size initialSize = Size(screenSize.width * 0.618, screenSize.height * 0.618);
+    Display primaryDisplay = await screenRetriever.getPrimaryDisplay();
+    Size screenSize = primaryDisplay.size;
+    Size initialSize = Size(
+      screenSize.width * 0.618,
+      screenSize.height * 0.618,
+    );
 
-  WindowOptions windowOptions = WindowOptions(
-    size: initialSize,
-    center: true,
-    title: 'Lumi Hub',
-  );
-  windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.setPreventClose(true);
-    await windowManager.show();
-    await windowManager.focus();
-  });
+    WindowOptions windowOptions = WindowOptions(
+      size: initialSize,
+      center: true,
+      title: 'Lumi Hub',
+    );
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.setPreventClose(true);
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AppSettings()),
         ChangeNotifierProvider(create: (_) => WsService()),
-        ChangeNotifierProxyProvider<WsService, BootstrapService>(
-          create: (context) => BootstrapService(context.read<WsService>()),
-          update: (context, ws, previous) => previous ?? BootstrapService(ws),
+        ChangeNotifierProxyProvider2<WsService, AppSettings, BootstrapService>(
+          create: (context) => BootstrapService(
+            context.read<WsService>(),
+            context.read<AppSettings>(),
+          ),
+          update: (context, ws, settings, previous) =>
+              previous ?? BootstrapService(ws, settings),
         ),
       ],
       child: const LumiApp(),
@@ -166,15 +176,19 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
-    trayManager.addListener(this);
-    _initTray();
+    if (!kIsWeb && Platform.isWindows) {
+      windowManager.addListener(this);
+      trayManager.addListener(this);
+      _initTray();
+    }
   }
 
   @override
   void dispose() {
-    trayManager.removeListener(this);
-    windowManager.removeListener(this);
+    if (!kIsWeb && Platform.isWindows) {
+      trayManager.removeListener(this);
+      windowManager.removeListener(this);
+    }
     super.dispose();
   }
 

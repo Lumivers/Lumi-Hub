@@ -110,10 +110,12 @@ class BootstrapScreen extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   if (!bootstrap.hasFailed)
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        '启动流程：环境检查 -> AstrBot 检测/拉起 -> Host 连通性确认 -> 登录',
-                        style: TextStyle(fontSize: 12),
+                        bootstrap.isRemoteClientMode
+                            ? '启动流程：远程地址检测 -> WebSocket 连接 -> 登录'
+                            : '启动流程：环境检查 -> AstrBot 检测/拉起 -> Host 连通性确认 -> 登录',
+                        style: const TextStyle(fontSize: 12),
                       ),
                     ),
                   if (bootstrap.hasFailed)

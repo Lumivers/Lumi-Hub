@@ -14,6 +14,8 @@ enum WsStatus { disconnected, connecting, connected }
 
 class WsService extends ChangeNotifier {
   static const String _defaultUrl = 'ws://127.0.0.1:8765';
+  static const String _serverUrlStorage = 'ws.server_url';
+  static const String _accessKeyStorage = 'ws.access_key';
   static const Duration _pingInterval = Duration(seconds: 20);
   static const Duration _reconnectDelay = Duration(seconds: 3);
 
@@ -33,6 +35,8 @@ class WsService extends ChangeNotifier {
   bool get isAuthenticated => _isAuthenticated;
   bool isRestoringAuth = false;
   String? _token;
+  String _serverUrl = _defaultUrl;
+  String _accessKey = '';
   Map<String, dynamic>? _user;
   Map<String, dynamic>? get user => _user;
 
@@ -75,7 +79,8 @@ class WsService extends ChangeNotifier {
   Stream<Map<String, dynamic>> get personaResponses =>
       _personaController.stream;
 
-  String get serverUrl => _defaultUrl;
+  String get serverUrl => _serverUrl;
+  String get accessKey => _accessKey;
 
   WsService() {
     _initAuth();
@@ -84,12 +89,33 @@ class WsService extends ChangeNotifier {
   Future<void> _initAuth() async {
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('auth_token');
+    _serverUrl = prefs.getString(_serverUrlStorage) ?? _defaultUrl;
+    _accessKey = prefs.getString(_accessKeyStorage) ?? '';
     if (_token != null) {
       isRestoringAuth = true;
     }
     // 注意：这里不再乐观地直接设置 _isAuthenticated = true
     // 而是等待 connect() 之后通过 AUTH_RESTORE 从服务端拿回结果，才进入 ChatScreen
     notifyListeners();
+  }
+
+  Future<void> setAccessKey(
+    String rawKey, {
+    bool reconnectIfConnected = true,
+  }) async {
+    final normalized = rawKey.trim();
+    if (normalized == _accessKey) return;
+
+    _accessKey = normalized;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_accessKeyStorage, _accessKey);
+    notifyListeners();
+
+    if (reconnectIfConnected &&
+        (_status == WsStatus.connected || _status == WsStatus.connecting)) {
+      disconnect();
+      unawaited(connect());
+    }
   }
 
   // ── 连接 ──────────────────────────────────────────────────────────────
@@ -99,7 +125,7 @@ class WsService extends ChangeNotifier {
     _setStatus(WsStatus.connecting);
 
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(_defaultUrl));
+      _channel = WebSocketChannel.connect(Uri.parse(_serverUrl));
       await _channel!.ready;
       _sub = _channel!.stream.listen(
         _onData,
@@ -117,6 +143,53 @@ class WsService extends ChangeNotifier {
       _setStatus(WsStatus.disconnected);
       _scheduleReconnect();
     }
+  }
+
+  Future<void> setServerUrl(
+    String rawUrl, {
+    bool reconnectIfConnected = true,
+  }) async {
+    final normalized = _normalizeServerUrl(rawUrl);
+    if (normalized == _serverUrl) return;
+
+    _serverUrl = normalized;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_serverUrlStorage, _serverUrl);
+    notifyListeners();
+
+    if (reconnectIfConnected &&
+        (_status == WsStatus.connected || _status == WsStatus.connecting)) {
+      disconnect();
+      unawaited(connect());
+    }
+  }
+
+  String _normalizeServerUrl(String rawUrl) {
+    final raw = rawUrl.trim();
+    if (raw.isEmpty) {
+      return _defaultUrl;
+    }
+
+    final withScheme = raw.contains('://') ? raw : 'ws://$raw';
+    final uri = Uri.tryParse(withScheme);
+    if (uri == null || uri.host.isEmpty) {
+      throw const FormatException('无效地址');
+    }
+    if (uri.scheme != 'ws' && uri.scheme != 'wss') {
+      throw const FormatException('仅支持 ws:// 或 wss://');
+    }
+
+    final effectivePort = uri.hasPort
+        ? uri.port
+        : (uri.scheme == 'wss' ? 443 : 80);
+
+    return Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: effectivePort,
+      path: uri.path,
+      query: uri.query.isEmpty ? null : uri.query,
+    ).toString();
   }
 
   void disconnect() {
@@ -845,6 +918,7 @@ class WsService extends ChangeNotifier {
         'client_version': '0.1.0',
         'platform': 'windows',
         'device_name': 'Lumi Client',
+        if (_accessKey.isNotEmpty) 'access_key': _accessKey,
       },
     });
   }

@@ -324,6 +324,7 @@ class LumiHubAdapter(Platform):
 
         self.ws_server = LumiWSServer(host=ws_host, port=ws_port)
         self.ws_server.on_message(self._handle_client_message)
+        self.ws_server.on_disconnect(self._handle_ws_disconnect)
 
         # 初始化数据库管理器，数据存放在项目根目录下的 data 文件夹
         import os
@@ -481,6 +482,18 @@ class LumiHubAdapter(Platform):
             await self._handle_file_upload_complete(message, ws_session_id)
         else:
             logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
+
+    async def _handle_ws_disconnect(self, ws_session_id: str) -> None:
+        """WebSocket 断开后的资源清理。"""
+        self.active_sessions.pop(ws_session_id, None)
+
+        stale_upload_ids = [
+            upload_id
+            for upload_id, session in self.upload_sessions.items()
+            if session.get("ws_session_id") == ws_session_id
+        ]
+        for upload_id in stale_upload_ids:
+            self._discard_upload_session(upload_id)
 
     def _normalize_mime(self, file_name: str, mime_type: str) -> str:
         guessed = mimetypes.guess_type(file_name)[0]

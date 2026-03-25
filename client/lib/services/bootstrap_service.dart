@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'app_settings.dart';
 import 'ws_service.dart';
 
 enum BootstrapStage {
@@ -51,10 +52,8 @@ class LogEntry {
 }
 
 class BootstrapService extends ChangeNotifier {
-  static const int _hostPort = 8765;
-  static const String _hostAddress = '127.0.0.1';
-
   final WsService _ws;
+  final AppSettings _settings;
   bool _startedAstrBotByHub = false;
   int? _astrBotPid;
 
@@ -74,12 +73,21 @@ class BootstrapService extends ChangeNotifier {
 
   bool get isReady => _stage == BootstrapStage.ready;
   bool get hasFailed => _stage == BootstrapStage.failed;
+  bool get isRemoteClientMode => _settings.remoteClientMode || !_supportsLocalHostLifecycle;
+
+  bool get _supportsLocalHostLifecycle => !kIsWeb && Platform.isWindows;
+  bool get _isLocalHostTarget {
+    final uri = Uri.tryParse(_ws.serverUrl);
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+  }
 
   final String astrbotRoot =
       Platform.environment['LUMI_ASTRBOT_ROOT'] ??
       'D:\\astrbot-develop\\AstrBot';
 
-  BootstrapService(this._ws) {
+  BootstrapService(this._ws, this._settings) {
     unawaited(start());
   }
 
@@ -96,6 +104,28 @@ class BootstrapService extends ChangeNotifier {
     _setStage(BootstrapStage.checkingEnv);
     _log('正在初始化内核...');
 
+    if (isRemoteClientMode) {
+      _log('远程连接模式：跳过本机 Python 检测与 AstrBot 拉起。');
+      _setStage(BootstrapStage.connectingWs);
+      _log('正在连接远程 Host: ${_ws.serverUrl}');
+      await _ws.connect();
+
+      final wsConnected = await _waitWsConnected(const Duration(seconds: 12));
+      if (!wsConnected) {
+        _fail('远程连接失败，请确认地址/密钥/网络: ${_ws.serverUrl}');
+        return;
+      }
+
+      _log('远程连接成功，启动准备完成。');
+      _setStage(BootstrapStage.ready);
+      return;
+    }
+
+    if (!_isLocalHostTarget) {
+      _fail('当前为本机模式，请将 Host 地址设置为 127.0.0.1 或开启远程连接模式。');
+      return;
+    }
+
     final pythonOk = await _checkPythonAvailable();
     if (!pythonOk) {
       _fail('未检测到 Python，请确认 python 已加入 PATH。');
@@ -104,7 +134,7 @@ class BootstrapService extends ChangeNotifier {
     _log('Python 环境检测通过。');
 
     _setStage(BootstrapStage.checkingHost);
-    _log('正在检测 AstrBot Host 连通性 ($_hostAddress:$_hostPort)...');
+    _log('正在检测 AstrBot Host 连通性 (${_ws.serverUrl})...');
 
     final hostOnline = await _isHostReachable();
     if (hostOnline) {
@@ -136,7 +166,7 @@ class BootstrapService extends ChangeNotifier {
 
     final wsConnected = await _waitWsConnected(const Duration(seconds: 10));
     if (!wsConnected) {
-      _fail('WebSocket 连接失败，请确认 Host 已正常监听 8765。');
+      _fail('WebSocket 连接失败，请确认 Host 已正常监听: ${_ws.serverUrl}');
       return;
     }
 
@@ -195,6 +225,11 @@ class BootstrapService extends ChangeNotifier {
   }
 
   Future<void> handleAppExit({required bool closeAstrBotOnExit}) async {
+    if (isRemoteClientMode || !_supportsLocalHostLifecycle) {
+      _log('远程连接模式：跳过本机 AstrBot 关闭流程。');
+      return;
+    }
+
     if (!closeAstrBotOnExit) {
       _log('退出策略：保留 AstrBot 继续运行。');
       return;
@@ -228,6 +263,11 @@ class BootstrapService extends ChangeNotifier {
   }
 
   Future<void> openLogDirectory() async {
+    if (!_supportsLocalHostLifecycle) {
+      _log('当前平台不支持一键打开日志目录。', level: LogLevel.warning);
+      return;
+    }
+
     if (_logDirectoryPath == null || _logDirectoryPath!.isEmpty) {
       _log('日志目录尚未初始化，无法打开。', level: LogLevel.warning);
       return;
@@ -265,8 +305,8 @@ class BootstrapService extends ChangeNotifier {
   Future<bool> _isHostReachable() async {
     try {
       final ws = await WebSocket.connect(
-        'ws://$_hostAddress:$_hostPort',
-      ).timeout(const Duration(milliseconds: 800));
+        _ws.serverUrl,
+      ).timeout(const Duration(milliseconds: 1200));
       await ws.close();
       return true;
     } catch (_) {
@@ -305,27 +345,35 @@ class BootstrapService extends ChangeNotifier {
       return;
     }
 
-    String? baseDir = Platform.environment['LOCALAPPDATA'];
-    if (baseDir == null || baseDir.isEmpty) {
-      baseDir = Directory.current.path;
+    try {
+      String? baseDir = Platform.environment['LOCALAPPDATA'];
+      if (baseDir == null || baseDir.isEmpty) {
+        baseDir = Directory.systemTemp.path;
+      }
+
+      final sep = Platform.pathSeparator;
+      final dir = Directory('$baseDir${sep}LumiHub${sep}logs');
+      await dir.create(recursive: true);
+
+      _logDirectoryPath = dir.path;
+
+      final now = DateTime.now();
+      final dateStr =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      _logFilePath = '${dir.path}${sep}launcher_$dateStr.log';
+
+      final file = File(_logFilePath!);
+      if (!await file.exists()) {
+        await file.create(recursive: true);
+      }
+
+      await _appendLogLine('---------------- new session ----------------');
+      await _appendLogLine('日志文件初始化完成: $_logFilePath');
+    } catch (_) {
+      // 移动端目录权限或路径不可用时，保留内存日志并继续启动流程。
+      _logDirectoryPath = null;
+      _logFilePath = null;
     }
-
-    final dir = Directory('$baseDir\\LumiHub\\logs');
-    await dir.create(recursive: true);
-
-    _logDirectoryPath = dir.path;
-    
-    final now = DateTime.now();
-    final dateStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    _logFilePath = '${dir.path}\\launcher_$dateStr.log';
-
-    final file = File(_logFilePath!);
-    if (!await file.exists()) {
-      await file.create(recursive: true);
-    }
-
-    await _appendLogLine('---------------- new session ----------------');
-    await _appendLogLine('日志文件初始化完成: $_logFilePath');
   }
 
   Future<void> _appendLogLine(String line) async {
