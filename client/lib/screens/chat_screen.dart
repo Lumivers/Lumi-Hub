@@ -1143,6 +1143,9 @@ class _SettingsDialog extends StatelessWidget {
     final settings = context.watch<AppSettings>();
     final bootstrap = context.read<BootstrapService>();
     final user = ws.user;
+    final screen = MediaQuery.of(context).size;
+    final dialogWidth = (screen.width * 0.94).clamp(320.0, 560.0);
+    final dialogMaxHeight = screen.height * 0.78;
 
     return AlertDialog(
       backgroundColor: colors.sidebar,
@@ -1155,11 +1158,14 @@ class _SettingsDialog extends StatelessWidget {
         ),
       ),
       content: SizedBox(
-        width: 300,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+        width: dialogWidth,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: dialogMaxHeight),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             // 账号信息卡片
             Container(
               padding: const EdgeInsets.all(12),
@@ -1507,7 +1513,9 @@ class _SettingsDialog extends StatelessWidget {
                 },
               ),
             ),
-          ],
+              ],
+            ),
+          ),
         ),
       ),
       actions: [
