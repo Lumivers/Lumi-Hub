@@ -54,6 +54,7 @@ class LogEntry {
 class BootstrapService extends ChangeNotifier {
   final WsService _ws;
   final AppSettings _settings;
+  Future<void>? _startFuture;
   bool _startedAstrBotByHub = false;
   int? _astrBotPid;
 
@@ -88,15 +89,21 @@ class BootstrapService extends ChangeNotifier {
       'D:\\astrbot-develop\\AstrBot';
 
   BootstrapService(this._ws, this._settings) {
-    unawaited(start());
+    // 启动由 BootstrapScreen 触发，以便先完成连接模式询问。
+  }
+
+  Future<void> ensureStarted() {
+    _startFuture ??= start();
+    return _startFuture!;
   }
 
   Future<void> retry() async {
     if (_stage != BootstrapStage.failed) return;
     _error = null;
     _logs.clear();
+    _startFuture = null;
     notifyListeners();
-    await start();
+    await ensureStarted();
   }
 
   Future<void> start() async {

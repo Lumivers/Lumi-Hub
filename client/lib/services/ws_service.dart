@@ -30,6 +30,7 @@ class WsService extends ChangeNotifier {
   Timer? _pingTimer;
   Timer? _reconnectTimer;
   bool _disposed = false;
+  final Completer<void> _authInitCompleter = Completer<void>();
 
   bool _isAuthenticated = false;
   bool get isAuthenticated => _isAuthenticated;
@@ -52,6 +53,7 @@ class WsService extends ChangeNotifier {
   int _historyOffset = 0;
   bool _historyHasMore = true;
   bool _historyLoading = false;
+  bool _pendingInitialHistoryAfterPersonaList = false;
   bool get hasMoreHistory => _historyHasMore;
   bool get isHistoryLoading => _historyLoading;
   static const int _uploadChunkSize = 256 * 1024;
@@ -93,6 +95,13 @@ class WsService extends ChangeNotifier {
     _accessKey = prefs.getString(_accessKeyStorage) ?? '';
     if (_token != null) {
       isRestoringAuth = true;
+      // 兜底：若连接已建立且尚未鉴权，补发一次自动恢复登录。
+      if (_status == WsStatus.connected && !_isAuthenticated) {
+        restoreAuth();
+      }
+    }
+    if (!_authInitCompleter.isCompleted) {
+      _authInitCompleter.complete();
     }
     // 注意：这里不再乐观地直接设置 _isAuthenticated = true
     // 而是等待 connect() 之后通过 AUTH_RESTORE 从服务端拿回结果，才进入 ChatScreen
@@ -122,6 +131,10 @@ class WsService extends ChangeNotifier {
 
   Future<void> connect() async {
     if (_status == WsStatus.connected || _status == WsStatus.connecting) return;
+
+    // 等待本地 token/serverUrl/accessKey 读取完成，避免热重启后自动登录竞态。
+    await _authInitCompleter.future;
+
     _setStatus(WsStatus.connecting);
 
     try {
@@ -454,8 +467,8 @@ class WsService extends ChangeNotifier {
       }
 
       _isAuthenticated = true;
-      // 登录成功后拉取历史 & 人格列表
-      loadInitialHistory();
+      // 先拿人格列表，再按激活人格拉历史，避免首次 persona_id 为空。
+      _pendingInitialHistoryAfterPersonaList = true;
       requestPersonaList();
       notifyListeners();
     } else {
@@ -523,6 +536,12 @@ class WsService extends ChangeNotifier {
     if (_activePersonaId.isEmpty && _personas.isNotEmpty) {
       _activePersonaId = _personas.first['id'] as String? ?? '';
     }
+
+    if (_pendingInitialHistoryAfterPersonaList) {
+      _pendingInitialHistoryAfterPersonaList = false;
+      unawaited(loadInitialHistory());
+    }
+
     notifyListeners();
   }
 

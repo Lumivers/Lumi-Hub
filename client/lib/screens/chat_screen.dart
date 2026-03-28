@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
@@ -134,7 +135,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (ws.messages.isEmpty) return;
 
     _loadingOlder = true;
-    final beforeMax = _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
+    final beforeMax = _scroll.hasClients
+        ? _scroll.position.maxScrollExtent
+        : 0.0;
     final beforePixels = _scroll.hasClients ? _scroll.position.pixels : 0.0;
 
     try {
@@ -349,189 +352,208 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).extension<LumiColors>()!;
     final ws = context.watch<WsService>();
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isCompact = screenWidth < 920;
+
     _ensureInitialBottomIfNeeded(ws);
 
-    return Scaffold(
-      body: Row(
-        children: [
-          // ── 左侧栏 ───────────────────────────────
-          _Sidebar(colors: colors, ws: ws),
-          // ── 分割线 ───────────────────────────────
-          VerticalDivider(width: 1, color: colors.divider),
-          // ── 聊天主区域 ───────────────────────────
-          Expanded(
-            child: Column(
-              children: [
-                _TopBar(
-                  colors: colors,
-                  ws: ws,
-                  activePersonaId: ws.activePersonaId,
-                  isSelectionMode: _isSelectionMode,
-                  selectedCount: _selectedMessageIds.length,
-                  onCancelSelection: _toggleSelectionMode,
-                  onDeleteSelected: () => _deleteSelectedMessages(ws),
-                ),
-                Divider(height: 1, color: colors.divider),
-                // 消息列表
-                Expanded(
-                  child: _MessageList(
-                    messages: ws.messages,
-                    activePersonaId: ws.activePersonaId,
-                    scroll: _scroll,
-                    colors: colors,
-                    isSelectionMode: _isSelectionMode,
-                    selectedMessageIds: _selectedMessageIds,
-                    onToggleSelection: _toggleMessageSelection,
-                    onEnterSelectionMode: () {
-                      if (!_isSelectionMode) _toggleSelectionMode();
-                    },
-                    onDeleteMessage: (msgId) {
-                      ws.removeMessages({msgId});
-                    },
-                  ),
-                ),
-                Divider(height: 1, color: colors.divider),
-                // 输入区
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_pendingFileName != null)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.of(context).size.width * 0.62,
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colors.inputBg,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: colors.divider),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.insert_drive_file_outlined,
-                                    color: colors.accent,
-                                    size: 16,
+    final chatMain = Column(
+      children: [
+        Builder(
+          builder: (scaffoldContext) => _TopBar(
+            colors: colors,
+            ws: ws,
+            activePersonaId: ws.activePersonaId,
+            isSelectionMode: _isSelectionMode,
+            selectedCount: _selectedMessageIds.length,
+            onCancelSelection: _toggleSelectionMode,
+            onDeleteSelected: () => _deleteSelectedMessages(ws),
+            onOpenSidebar: isCompact
+                ? () => Scaffold.of(scaffoldContext).openDrawer()
+                : null,
+          ),
+        ),
+        Divider(height: 1, color: colors.divider),
+        Expanded(
+          child: _MessageList(
+            messages: ws.messages,
+            activePersonaId: ws.activePersonaId,
+            scroll: _scroll,
+            colors: colors,
+            isSelectionMode: _isSelectionMode,
+            selectedMessageIds: _selectedMessageIds,
+            onToggleSelection: _toggleMessageSelection,
+            onEnterSelectionMode: () {
+              if (!_isSelectionMode) _toggleSelectionMode();
+            },
+            onDeleteMessage: (msgId) {
+              ws.removeMessages({msgId});
+            },
+          ),
+        ),
+        Divider(height: 1, color: colors.divider),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_pendingFileName != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: MediaQuery.of(context).size.width * 0.62,
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.inputBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: colors.divider),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.insert_drive_file_outlined,
+                            color: colors.accent,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _pendingFileName!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          _pendingFileName!,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.onSurface,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
+                                ),
+                                const SizedBox(height: 4),
+                                if (_isUploadingAttachment)
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          child: LinearProgressIndicator(
+                                            value: _uploadProgress,
+                                            minHeight: 5,
+                                            backgroundColor: colors.divider,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                  colors.accent,
+                                                ),
                                           ),
                                         ),
-                                        const SizedBox(height: 4),
-                                        if (_isUploadingAttachment)
-                                          Row(
-                                            children: [
-                                              Expanded(
-                                                child: ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(6),
-                                                  child: LinearProgressIndicator(
-                                                    value: _uploadProgress,
-                                                    minHeight: 5,
-                                                    backgroundColor:
-                                                        colors.divider,
-                                                    valueColor:
-                                                        AlwaysStoppedAnimation<
-                                                          Color
-                                                        >(colors.accent),
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                '${(_uploadProgress * 100).toStringAsFixed(0)}%',
-                                                style: TextStyle(
-                                                  color: colors.subtext,
-                                                  fontSize: 11,
-                                                ),
-                                              ),
-                                            ],
-                                          )
-                                        else
-                                          Text(
-                                            _uploadError != null
-                                                ? '失败: $_uploadError'
-                                                : '上传完成',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: _uploadError != null
-                                                  ? Colors.redAccent
-                                                  : const Color(0xFF4CAF50),
-                                              fontSize: 11,
-                                            ),
-                                          ),
-                                      ],
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '${(_uploadProgress * 100).toStringAsFixed(0)}%',
+                                        style: TextStyle(
+                                          color: colors.subtext,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                else
+                                  Text(
+                                    _uploadError != null
+                                        ? '失败: $_uploadError'
+                                        : '上传完成',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: _uploadError != null
+                                          ? Colors.redAccent
+                                          : const Color(0xFF4CAF50),
+                                      fontSize: 11,
                                     ),
                                   ),
-                                  IconButton(
-                                    onPressed: _isUploadingAttachment
-                                        ? null
-                                        : _clearAttachmentState,
-                                    icon: Icon(
-                                      Icons.close_rounded,
-                                      color: colors.subtext,
-                                      size: 16,
-                                    ),
-                                    splashRadius: 14,
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 24,
-                                      minHeight: 24,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                              ],
                             ),
                           ),
-                        ),
+                          IconButton(
+                            onPressed: _isUploadingAttachment
+                                ? null
+                                : _clearAttachmentState,
+                            icon: Icon(
+                              Icons.close_rounded,
+                              color: colors.subtext,
+                              size: 16,
+                            ),
+                            splashRadius: 14,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 24,
+                              minHeight: 24,
+                            ),
+                          ),
+                        ],
                       ),
-                    _InputBar(
-                      controller: _input,
-                      focusNode: _focusNode,
-                      colors: colors,
-                      activePersonaId: ws.activePersonaId,
-                      onSend: () => _send(ws),
-                      onAttach: () {
-                        _onAttach(ws);
-                      },
-                      enabled:
-                          ws.status == WsStatus.connected &&
-                          !ws.isGenerating &&
-                          !_isUploadingAttachment,
-                      isGenerating: ws.isGenerating,
                     ),
-                  ],
+                  ),
                 ),
+              ),
+            _InputBar(
+              controller: _input,
+              focusNode: _focusNode,
+              colors: colors,
+              activePersonaId: ws.activePersonaId,
+              onSend: () => _send(ws),
+              onAttach: () {
+                _onAttach(ws);
+              },
+              enabled:
+                  ws.status == WsStatus.connected &&
+                  !ws.isGenerating &&
+                  !_isUploadingAttachment,
+              isGenerating: ws.isGenerating,
+            ),
+          ],
+        ),
+      ],
+    );
+
+    return Scaffold(
+      drawer: isCompact
+          ? Drawer(
+              width: (screenWidth * 0.62).clamp(220.0, 280.0),
+              child: SafeArea(
+                child: _Sidebar(
+                  colors: colors,
+                  ws: ws,
+                  onPersonaSelected: () {
+                    if (Navigator.of(context).canPop()) {
+                      Navigator.of(context).pop();
+                    }
+                  },
+                ),
+              ),
+            )
+          : null,
+      body: isCompact
+          ? chatMain
+          : Row(
+              children: [
+                _Sidebar(colors: colors, ws: ws),
+                VerticalDivider(width: 1, color: colors.divider),
+                Expanded(child: chatMain),
               ],
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -541,8 +563,13 @@ class _ChatScreenState extends State<ChatScreen> {
 class _Sidebar extends StatefulWidget {
   final LumiColors colors;
   final WsService ws;
+  final VoidCallback? onPersonaSelected;
 
-  const _Sidebar({required this.colors, required this.ws});
+  const _Sidebar({
+    required this.colors,
+    required this.ws,
+    this.onPersonaSelected,
+  });
 
   @override
   State<_Sidebar> createState() => _SidebarState();
@@ -568,12 +595,12 @@ class _SidebarState extends State<_Sidebar> {
     await prefs.setStringList(_personaOrderStorageKey(), _personaOrder);
   }
 
-  List<Map<String, dynamic>> _orderedPersonas(List<Map<String, dynamic>> personas) {
+  List<Map<String, dynamic>> _orderedPersonas(
+    List<Map<String, dynamic>> personas,
+  ) {
     if (personas.isEmpty) return personas;
 
-    final byId = {
-      for (final p in personas) (p['id'] as String? ?? ''): p,
-    };
+    final byId = {for (final p in personas) (p['id'] as String? ?? ''): p};
 
     final ordered = <Map<String, dynamic>>[];
     final used = <String>{};
@@ -765,7 +792,10 @@ class _SidebarState extends State<_Sidebar> {
                             ),
                           ),
                         ),
-                        onTap: () => ws.switchPersona(id),
+                        onTap: () {
+                          ws.switchPersona(id);
+                          widget.onPersonaSelected?.call();
+                        },
                         onClearHistory: () => _confirmClearHistory(id),
                         onDelete: () => _confirmDelete(id),
                       );
@@ -1019,6 +1049,127 @@ class _SettingsDialog extends StatelessWidget {
 
   const _SettingsDialog({required this.ws, required this.colors});
 
+  bool get _supportsLocalHostLifecycle => !kIsWeb && Platform.isWindows;
+
+  bool _isLocalHostUrl(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+  }
+
+  Future<void> _applyConnectionMode(
+    BuildContext context,
+    ConnectionMode mode,
+  ) async {
+    final settings = context.read<AppSettings>();
+    final currentUrl = ws.serverUrl;
+    String nextUrl = currentUrl;
+
+    final shouldUseRemote =
+        mode != ConnectionMode.localOrUsb || !_supportsLocalHostLifecycle;
+
+    switch (mode) {
+      case ConnectionMode.localOrUsb:
+        nextUrl = 'ws://127.0.0.1:8765';
+        break;
+      case ConnectionMode.lan:
+        if (_isLocalHostUrl(currentUrl)) {
+          nextUrl = 'ws://192.168.1.10:8765';
+        }
+        break;
+      case ConnectionMode.publicTunnel:
+        if (_isLocalHostUrl(currentUrl)) {
+          nextUrl = 'wss://your-domain.example.com/ws';
+        }
+        break;
+    }
+
+    settings.setConnectionMode(mode);
+    settings.setRemoteClientMode(shouldUseRemote);
+    await ws.setServerUrl(nextUrl, reconnectIfConnected: false);
+  }
+
+  Future<void> _showConnectionModeSelector(BuildContext context) async {
+    final settings = context.read<AppSettings>();
+    var selected = settings.connectionMode;
+
+    final localLabel = _supportsLocalHostLifecycle
+        ? '本机/USB 调试 (127.0.0.1)'
+        : 'USB 调试转发 (127.0.0.1)';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('连接方式'),
+              content: SizedBox(
+                width: (MediaQuery.of(dialogContext).size.width * 0.9).clamp(
+                  280.0,
+                  420.0,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    RadioListTile<ConnectionMode>(
+                      value: ConnectionMode.localOrUsb,
+                      groupValue: selected,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(localLabel),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => selected = value);
+                      },
+                    ),
+                    RadioListTile<ConnectionMode>(
+                      value: ConnectionMode.lan,
+                      groupValue: selected,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('局域网'),
+                      subtitle: const Text('ws://192.168.x.x:8765'),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => selected = value);
+                      },
+                    ),
+                    RadioListTile<ConnectionMode>(
+                      value: ConnectionMode.publicTunnel,
+                      groupValue: selected,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('公网/内网穿透'),
+                      subtitle: const Text('wss://your-domain.example.com/ws'),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => selected = value);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    await _applyConnectionMode(dialogContext, selected);
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                    }
+                  },
+                  child: const Text('应用'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _showServerUrlEditor(BuildContext context) async {
     final controller = TextEditingController(text: ws.serverUrl);
     String? errorText;
@@ -1031,7 +1182,10 @@ class _SettingsDialog extends StatelessWidget {
             return AlertDialog(
               title: const Text('Host 地址'),
               content: SizedBox(
-                width: 420,
+                width: (MediaQuery.of(dialogContext).size.width * 0.9).clamp(
+                  280.0,
+                  420.0,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1093,7 +1247,10 @@ class _SettingsDialog extends StatelessWidget {
         return AlertDialog(
           title: const Text('接入密钥'),
           content: SizedBox(
-            width: 420,
+            width: (MediaQuery.of(dialogContext).size.width * 0.9).clamp(
+              280.0,
+              420.0,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1166,353 +1323,417 @@ class _SettingsDialog extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-            // 账号信息卡片
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: colors.inputBg,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: colors.accent,
-                    child: const Icon(Icons.person, color: Colors.white),
+                // 账号信息卡片
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colors.inputBg,
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          user?['username'] ?? '未知用户',
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: colors.accent,
+                        child: const Icon(Icons.person, color: Colors.white),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user?['username'] ?? '未知用户',
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.onSurface,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'ID: ${user?['id'] ?? '-'}',
+                              style: TextStyle(
+                                color: colors.subtext,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // 应用与系统设置
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, bottom: 8),
+                  child: Text(
+                    '应用与系统',
+                    style: TextStyle(
+                      color: colors.accent,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: colors.inputBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colors.divider.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      // 1. 字体
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.font_download_outlined,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '应用字体',
                           style: TextStyle(
+                            fontSize: 14,
                             color: Theme.of(context).colorScheme.onSurface,
-                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                        Text(
-                          'ID: ${user?['id'] ?? '-'}',
+                        trailing: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: settings.fontKey,
+                            dropdownColor: colors.inputBg,
+                            icon: Icon(
+                              Icons.expand_more,
+                              size: 16,
+                              color: colors.subtext,
+                            ),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontSize: 13,
+                            ),
+                            items: kAvailableFonts.entries
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(e.value),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null) settings.setFontFamily(val);
+                            },
+                          ),
+                        ),
+                      ),
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
+                      ),
+
+                      // 2. 退出行为
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.close_fullscreen,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '关闭窗口动作',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          '点击系统关闭按钮时...',
                           style: TextStyle(color: colors.subtext, fontSize: 12),
                         ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // 应用与系统设置
-            Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 8),
-              child: Text(
-                '应用与系统',
-                style: TextStyle(
-                  color: colors.accent,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            Container(
-              decoration: BoxDecoration(
-                color: colors.inputBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: colors.divider.withValues(alpha: 0.1),
-                ),
-              ),
-              child: Column(
-                children: [
-                  // 1. 字体
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.font_download_outlined,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      '应用字体',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
+                        trailing: DropdownButtonHideUnderline(
+                          child: DropdownButton<WindowCloseAction>(
+                            value: settings.windowCloseAction,
+                            dropdownColor: colors.inputBg,
+                            icon: Icon(
+                              Icons.expand_more,
+                              size: 16,
+                              color: colors.subtext,
+                            ),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontSize: 13,
+                            ),
+                            items: kWindowCloseActionLabels.entries
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(e.value),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null)
+                                settings.setWindowCloseAction(val);
+                            },
+                          ),
+                        ),
                       ),
-                    ),
-                    trailing: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: settings.fontKey,
-                        dropdownColor: colors.inputBg,
-                        icon: Icon(
-                          Icons.expand_more,
-                          size: 16,
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
+                      ),
+
+                      // 3. 随前端关闭 AstrBot
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.power_settings_new,
                           color: colors.subtext,
+                          size: 20,
                         ),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontSize: 13,
+                        title: Text(
+                          '同步关闭 AstrBot',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
                         ),
-                        items: kAvailableFonts.entries
-                            .map(
-                              (e) => DropdownMenuItem(
-                                value: e.key,
-                                child: Text(e.value),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (val) {
-                          if (val != null) settings.setFontFamily(val);
-                        },
+                        subtitle: Text(
+                          '完全退出时结束核心进程',
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Transform.scale(
+                          scale: 0.8,
+                          child: Switch(
+                            value: settings.closeAstrBotOnExit,
+                            onChanged: settings.setCloseAstrBotOnExit,
+                            activeThumbColor: colors.accent,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  Divider(
-                    height: 1,
-                    color: colors.divider.withValues(alpha: 0.2),
-                    indent: 48,
-                  ),
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
+                      ),
 
-                  // 2. 退出行为
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.close_fullscreen,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      '关闭窗口动作',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
-                    ),
-                    subtitle: Text(
-                      '点击系统关闭按钮时...',
-                      style: TextStyle(color: colors.subtext, fontSize: 12),
-                    ),
-                    trailing: DropdownButtonHideUnderline(
-                      child: DropdownButton<WindowCloseAction>(
-                        value: settings.windowCloseAction,
-                        dropdownColor: colors.inputBg,
-                        icon: Icon(
-                          Icons.expand_more,
-                          size: 16,
+                      // 4. 连接方式
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.router_outlined,
                           color: colors.subtext,
+                          size: 20,
                         ),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontSize: 13,
+                        title: Text(
+                          '连接方式',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
                         ),
-                        items: kWindowCloseActionLabels.entries
-                            .map(
-                              (e) => DropdownMenuItem(
-                                value: e.key,
-                                child: Text(e.value),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (val) {
-                          if (val != null) settings.setWindowCloseAction(val);
-                        },
+                        subtitle: Text(
+                          kConnectionModeLabels[settings.connectionMode] ?? '未设置',
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Icon(
+                          Icons.edit,
+                          color: colors.subtext,
+                          size: 16,
+                        ),
+                        onTap: () => _showConnectionModeSelector(context),
                       ),
-                    ),
-                  ),
-                  Divider(
-                    height: 1,
-                    color: colors.divider.withValues(alpha: 0.2),
-                    indent: 48,
-                  ),
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
+                      ),
 
-                  // 3. 随前端关闭 AstrBot
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.power_settings_new,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      '同步关闭 AstrBot',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
+                      // 5. 每次启动询问连接方式
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.help_outline,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '每次启动询问连接方式',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          settings.askConnectionModeOnLaunch
+                              ? '已开启：每次都会弹出选择'
+                              : '已关闭：自动使用已保存模式',
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Transform.scale(
+                          scale: 0.8,
+                          child: Switch(
+                            value: settings.askConnectionModeOnLaunch,
+                            onChanged: settings.setAskConnectionModeOnLaunch,
+                            activeThumbColor: colors.accent,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
                       ),
-                    ),
-                    subtitle: Text(
-                      '完全退出时结束核心进程',
-                      style: TextStyle(color: colors.subtext, fontSize: 12),
-                    ),
-                    trailing: Transform.scale(
-                      scale: 0.8,
-                      child: Switch(
-                        value: settings.closeAstrBotOnExit,
-                        onChanged: settings.setCloseAstrBotOnExit,
-                        activeThumbColor: colors.accent,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
                       ),
-                    ),
-                  ),
-                  Divider(
-                    height: 1,
-                    color: colors.divider.withValues(alpha: 0.2),
-                    indent: 48,
-                  ),
 
-                  // 4. 远程连接模式
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.wifi_tethering,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      '远程连接模式',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
+                      // 6. 打开日志目录
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.folder_open,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '打开日志目录',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          bootstrap.logDirectoryPath ?? '日志目录尚未初始化',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Icon(
+                          Icons.open_in_new,
+                          color: colors.subtext,
+                          size: 16,
+                        ),
+                        onTap: bootstrap.openLogDirectory,
                       ),
-                    ),
-                    subtitle: Text(
-                      '跳过本机 Host 拉起，仅连接已配置地址',
-                      style: TextStyle(color: colors.subtext, fontSize: 12),
-                    ),
-                    trailing: Transform.scale(
-                      scale: 0.8,
-                      child: Switch(
-                        value: settings.remoteClientMode,
-                        onChanged: settings.setRemoteClientMode,
-                        activeThumbColor: colors.accent,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
                       ),
-                    ),
-                  ),
-                  Divider(
-                    height: 1,
-                    color: colors.divider.withValues(alpha: 0.2),
-                    indent: 48,
-                  ),
 
-                  // 5. 打开日志目录
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.folder_open,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      '打开日志目录',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
+                      // 7. Host 地址
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.dns_outlined,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          'Host 地址',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          ws.serverUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Icon(
+                          Icons.edit,
+                          color: colors.subtext,
+                          size: 16,
+                        ),
+                        onTap: () => _showServerUrlEditor(context),
                       ),
-                    ),
-                    subtitle: Text(
-                      bootstrap.logDirectoryPath ?? '日志目录尚未初始化',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: colors.subtext, fontSize: 12),
-                    ),
-                    trailing: Icon(
-                      Icons.open_in_new,
-                      color: colors.subtext,
-                      size: 16,
-                    ),
-                    onTap: bootstrap.openLogDirectory,
-                  ),
-                  Divider(
-                    height: 1,
-                    color: colors.divider.withValues(alpha: 0.2),
-                    indent: 48,
-                  ),
-
-                  // 6. Host 地址
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.dns_outlined,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      'Host 地址',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
                       ),
-                    ),
-                    subtitle: Text(
-                      ws.serverUrl,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: colors.subtext, fontSize: 12),
-                    ),
-                    trailing: Icon(
-                      Icons.edit,
-                      color: colors.subtext,
-                      size: 16,
-                    ),
-                    onTap: () => _showServerUrlEditor(context),
-                  ),
-                  Divider(
-                    height: 1,
-                    color: colors.divider.withValues(alpha: 0.2),
-                    indent: 48,
-                  ),
 
-                  // 7. 接入密钥
-                  ListTile(
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    leading: Icon(
-                      Icons.vpn_key_outlined,
-                      color: colors.subtext,
-                      size: 20,
-                    ),
-                    title: Text(
-                      '接入密钥',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.onSurface,
+                      // 8. 接入密钥
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.vpn_key_outlined,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '接入密钥',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          ws.accessKey.isEmpty ? '未设置' : '已设置（已隐藏）',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Icon(
+                          Icons.edit,
+                          color: colors.subtext,
+                          size: 16,
+                        ),
+                        onTap: () => _showAccessKeyEditor(context),
                       ),
-                    ),
-                    subtitle: Text(
-                      ws.accessKey.isEmpty ? '未设置' : '已设置（已隐藏）',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: colors.subtext, fontSize: 12),
-                    ),
-                    trailing: Icon(
-                      Icons.edit,
-                      color: colors.subtext,
-                      size: 16,
-                    ),
-                    onTap: () => _showAccessKeyEditor(context),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // 注销按钮
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
-                  side: const BorderSide(color: Colors.redAccent),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                icon: const Icon(Icons.logout, size: 18),
-                label: const Text('注销登录'),
-                onPressed: () async {
-                  await ws.logout();
-                  if (context.mounted) Navigator.pop(context);
-                },
-              ),
-            ),
+                const SizedBox(height: 24),
+
+                // 注销按钮
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(color: Colors.redAccent),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    icon: const Icon(Icons.logout, size: 18),
+                    label: const Text('注销登录'),
+                    onPressed: () async {
+                      await ws.logout();
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
+                ),
               ],
             ),
           ),
@@ -1538,6 +1759,7 @@ class _TopBar extends StatelessWidget {
   final int selectedCount;
   final VoidCallback onCancelSelection;
   final VoidCallback onDeleteSelected;
+  final VoidCallback? onOpenSidebar;
 
   const _TopBar({
     required this.colors,
@@ -1547,63 +1769,70 @@ class _TopBar extends StatelessWidget {
     this.selectedCount = 0,
     required this.onCancelSelection,
     required this.onDeleteSelected,
+    this.onOpenSidebar,
   });
 
   @override
   Widget build(BuildContext context) {
     if (isSelectionMode) {
-      return Container(
-        height: 56,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        color: colors.sidebar,
-        child: Row(
-          children: [
-            IconButton(
-              icon: Icon(Icons.close, color: colors.subtext),
-              onPressed: onCancelSelection,
-              tooltip: '取消多选',
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '已选择 $selectedCount 项',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
-            ),
-            const Spacer(),
-            if (selectedCount > 0)
+      return SafeArea(
+        bottom: false,
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          color: colors.sidebar,
+          child: Row(
+            children: [
               IconButton(
-                icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                onPressed: () {
-                  showDialog(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('删除消息'),
-                      content: Text('确定要删除选中的 $selectedCount 条消息吗？'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('取消'),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            onDeleteSelected();
-                          },
-                          child: const Text(
-                            '删除',
-                            style: TextStyle(color: Colors.red),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                tooltip: '删除选中项',
+                icon: Icon(Icons.close, color: colors.subtext),
+                onPressed: onCancelSelection,
+                tooltip: '取消多选',
               ),
-          ],
+              const SizedBox(width: 8),
+              Text(
+                '已选择 $selectedCount 项',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+              const Spacer(),
+              if (selectedCount > 0)
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: Colors.redAccent,
+                  ),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('删除消息'),
+                        content: Text('确定要删除选中的 $selectedCount 条消息吗？'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('取消'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              onDeleteSelected();
+                            },
+                            child: const Text(
+                              '删除',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  tooltip: '删除选中项',
+                ),
+            ],
+          ),
         ),
       );
     }
@@ -1619,54 +1848,65 @@ class _TopBar extends StatelessWidget {
       WsStatus.disconnected => const Color(0xFF9E9E9E),
     };
 
-    return Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: colors.accent,
-            child: Text(
-              activePersonaId.isNotEmpty
-                  ? activePersonaId[0].toUpperCase()
-                  : '?',
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                activePersonaId.isNotEmpty ? activePersonaId : '未选择人格',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            if (onOpenSidebar != null) ...[
+              IconButton(
+                icon: Icon(Icons.menu_rounded, color: colors.subtext),
+                onPressed: onOpenSidebar,
+                tooltip: '打开侧边栏',
               ),
-              Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    margin: const EdgeInsets.only(right: 4),
-                    decoration: BoxDecoration(
-                      color: statusColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  Text(
-                    statusText,
-                    style: TextStyle(fontSize: 12, color: colors.subtext),
-                  ),
-                ],
-              ),
+              const SizedBox(width: 4),
             ],
-          ),
-        ],
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: colors.accent,
+              child: Text(
+                activePersonaId.isNotEmpty
+                    ? activePersonaId[0].toUpperCase()
+                    : '?',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  activePersonaId.isNotEmpty ? activePersonaId : '未选择人格',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.only(right: 4),
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    Text(
+                      statusText,
+                      style: TextStyle(fontSize: 12, color: colors.subtext),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2286,7 +2526,9 @@ class _BubbleItemState extends State<_BubbleItem> {
                       Flexible(
                         child: Container(
                           constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.55,
+                            maxWidth: MediaQuery.of(context).size.width <= 640
+                                ? MediaQuery.of(context).size.width * 0.78
+                                : MediaQuery.of(context).size.width * 0.55,
                           ),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -2471,15 +2713,19 @@ class _InputBarState extends State<_InputBar> {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = MediaQuery.of(context).size.width <= 640;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 10 : 12,
+        vertical: isCompact ? 10 : 8,
+      ),
       child: Row(
         children: [
           Expanded(
             child: Container(
               decoration: BoxDecoration(
                 color: widget.colors.inputBg,
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(isCompact ? 24 : 20),
                 border: Border.all(color: widget.colors.divider),
               ),
               child: Focus(
@@ -2499,15 +2745,17 @@ class _InputBarState extends State<_InputBar> {
                     hintText: widget.isGenerating
                         ? 'AI 回复中... (可继续输入，不可发送)'
                         : widget.enabled
-                        ? '发送消息... (Enter 发送，Shift+Enter 换行)'
+                        ? (isCompact
+                              ? '发送消息...'
+                              : '发送消息... (Enter 发送，Shift+Enter 换行)')
                         : '等待连接中...',
                     hintStyle: TextStyle(
                       color: widget.colors.subtext,
-                      fontSize: 13,
+                      fontSize: isCompact ? 12 : 13,
                     ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 16 : 16,
+                      vertical: isCompact ? 13 : 10,
                     ),
                     border: InputBorder.none,
                   ),
@@ -2515,7 +2763,7 @@ class _InputBarState extends State<_InputBar> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: isCompact ? 6 : 8),
           IconButton(
             onPressed: widget.onAttach,
             icon: Icon(
@@ -2529,9 +2777,10 @@ class _InputBarState extends State<_InputBar> {
                   ? widget.colors.accent.withValues(alpha: 0.15)
                   : Colors.transparent,
               shape: const CircleBorder(),
+              minimumSize: Size(isCompact ? 44 : 40, isCompact ? 44 : 40),
             ),
           ),
-          const SizedBox(width: 4),
+          SizedBox(width: isCompact ? 2 : 4),
           IconButton(
             onPressed: widget.enabled && !widget.isGenerating
                 ? widget.onSend
@@ -2558,6 +2807,7 @@ class _InputBarState extends State<_InputBar> {
                   ? widget.colors.accent.withValues(alpha: 0.15)
                   : Colors.transparent,
               shape: const CircleBorder(),
+              minimumSize: Size(isCompact ? 48 : 40, isCompact ? 48 : 40),
             ),
           ),
         ],
