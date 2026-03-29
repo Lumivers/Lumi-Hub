@@ -20,15 +20,66 @@ Lumi-Hub 旨在提供一个纯净、可靠的自建通信链路。Host 端直接
 
 > **前置条件（必须满足）**：
 > 你的本机必须已经安装 **AstrBot 本体**，并且已经安装好与当前客户端版本配套的 **Lumi-Hub Host 插件**（`lumi_hub`）。
-> 此次更新的windows客户端可一键拉起main.py启动astrbot，如果不想这么做，你可以先启动astrbot。
-> 如果你需要一键拉起，请确保你的环境变量LUMI_ASTRBOT_ROOT里面加入了astrbot所在路径。或者你的路径默认为D:\astrbot-develop\AstrBot。
+> Windows 客户端支持一键拉起 AstrBot（`python main.py`）。
+> 一键拉起依赖 AstrBot 路径：优先读取环境变量 `LUMI_ASTRBOT_ROOT`，否则默认 `D:\astrbot-develop\AstrBot`。
 
 | 步骤 | 操作 |
 |------|------|
 | **① 下载客户端发布包** | 前往 [Releases](https://github.com/Lumivers/Lumi-Hub/releases) 下载客户端：Android 下载 `Lumi-Hub-Android-vX.X.X-beta.apk`，Windows 下载 `Lumi-Hub-Windows-vX.X.X.zip` |
 | **② 安装/启动客户端** | Android 直接安装 APK；Windows 解压 ZIP 后运行 `lumi_client.exe` |
-| **③ 启动 AstrBot** | **必须先启动本机 AstrBot**（且已加载配套 `lumi_hub` 插件），Host 服务会随 AstrBot 一起运行 |
+| **③ 启动 AstrBot** | 可手动先启动 AstrBot；也可让 Windows 客户端在本机模式下一键拉起 |
 | **④ 自动连接** | 客户端启动后自动连接本机 Host（默认端口 `8765`）。⚠️ 当前仅支持连接同一台电脑上的 AstrBot |
+
+### 启动与连接
+
+#### 1. Windows 本机模式（推荐，支持一键拉起）
+
+1. 确认 AstrBot 已安装，并且插件目录中存在 `lumi_hub`。
+2. 启动 `lumi_client.exe`，在启动页选择「本机启动 Host (127.0.0.1)」。
+3. 客户端会自动执行以下流程：
+  1. 检测 Python（`python --version`）
+  2. 检测 Host 是否在线（`ws://127.0.0.1:8765`）
+  3. 若未在线则自动在 AstrBot 根目录执行 `python main.py`
+  4. 等待端口就绪并自动建立 WebSocket 连接
+4. 连接成功后自动进入登录/聊天。
+
+#### 2. Windows 手动启动 AstrBot（不使用一键拉起）
+
+1. 先在 AstrBot 根目录手动启动：
+
+```bash
+python main.py
+```
+
+2. 再启动 `lumi_client.exe`。
+3. 保持连接地址为 `ws://127.0.0.1:8765`。
+
+#### 3. Android 连接本机 AstrBot（USB 调试）
+
+1. 手机开启 USB 调试并连接电脑。
+2. 电脑端执行端口反向映射：
+
+```bash
+adb reverse tcp:8765 tcp:8765
+```
+
+3. 手机端启动 Lumi-Hub，连接方式选择「本机/USB（127.0.0.1）」。
+4. 保持电脑上的 AstrBot 运行中。
+
+#### 4. 局域网 / 公网连接模式
+
+1. 启动页选择「局域网」或「公网/内网穿透」。
+2. 填写完整地址（示例）：
+  1. 局域网：`ws://192.168.1.23:8765`
+  2. 公网：`wss://your-domain.example.com/ws`
+3. 这两种模式不会自动拉起远端 AstrBot，需要你在目标主机上先启动 AstrBot 与插件。
+
+#### 5. 常见问题排查
+
+1. 一键拉起失败：确认 `python` 已加入 PATH，且 `LUMI_ASTRBOT_ROOT` 指向正确 AstrBot 根目录。
+2. 一直连接不上 8765：确认 AstrBot 已启动、插件已加载、端口未被占用。
+3. Android 连不上本机：重新执行 `adb reverse tcp:8765 tcp:8765`，并确认 USB 调试授权通过。
+4. 连接远端失败：检查地址协议是否正确（`ws://` 或 `wss://`）、防火墙与反向代理配置是否放行。
 
 ### 🛠️ 开发者（本地调试）
 
