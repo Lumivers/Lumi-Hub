@@ -17,6 +17,9 @@ sync.py
 /client/.flutter-plugins
 /client/.flutter-plugins-dependencies
 *.zip
+*.apk
+*.ipa
+*.sha1
 
 # IDE 与系统
 .vscode/
