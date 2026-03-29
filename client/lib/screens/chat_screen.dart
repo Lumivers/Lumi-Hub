@@ -246,6 +246,15 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _setSelectedMessages(Set<String> messageIds) {
+    setState(() {
+      _selectedMessageIds
+        ..clear()
+        ..addAll(messageIds);
+      _isSelectionMode = _selectedMessageIds.isNotEmpty;
+    });
+  }
+
   void _deleteSelectedMessages(WsService ws) {
     if (_selectedMessageIds.isEmpty) return;
     ws.removeMessages(_selectedMessageIds);
@@ -383,6 +392,7 @@ class _ChatScreenState extends State<ChatScreen> {
             isSelectionMode: _isSelectionMode,
             selectedMessageIds: _selectedMessageIds,
             onToggleSelection: _toggleMessageSelection,
+            onSetSelection: _setSelectedMessages,
             onEnterSelectionMode: () {
               if (!_isSelectionMode) _toggleSelectionMode();
             },
@@ -1550,7 +1560,8 @@ class _SettingsDialog extends StatelessWidget {
                           ),
                         ),
                         subtitle: Text(
-                          kConnectionModeLabels[settings.connectionMode] ?? '未设置',
+                          kConnectionModeLabels[settings.connectionMode] ??
+                              '未设置',
                           style: TextStyle(color: colors.subtext, fontSize: 12),
                         ),
                         trailing: Icon(
@@ -1922,6 +1933,7 @@ class _MessageList extends StatefulWidget {
   final bool isSelectionMode;
   final Set<String> selectedMessageIds;
   final Function(String) onToggleSelection;
+  final ValueChanged<Set<String>> onSetSelection;
   final VoidCallback onEnterSelectionMode;
   final Function(String) onDeleteMessage;
 
@@ -1933,6 +1945,7 @@ class _MessageList extends StatefulWidget {
     required this.isSelectionMode,
     required this.selectedMessageIds,
     required this.onToggleSelection,
+    required this.onSetSelection,
     required this.onEnterSelectionMode,
     required this.onDeleteMessage,
   });
@@ -1943,8 +1956,78 @@ class _MessageList extends StatefulWidget {
 
 class _MessageListState extends State<_MessageList> {
   bool _hasGlobalSelection = false;
+  final GlobalKey _gestureSurfaceKey = GlobalKey();
+  final Map<String, Rect> _messageRowRects = {};
+  final Map<String, Rect> _messageBubbleRects = {};
+  String? _activeTextActionMessageId;
+
+  Offset? _dragStartLocal;
+  Offset? _dragCurrentLocal;
+  bool _dragArmed = false;
+  bool _isBoxSelecting = false;
+
+  bool _pointInAnyBubble(Offset globalPoint) {
+    for (final rect in _messageBubbleRects.values) {
+      if (rect.contains(globalPoint)) return true;
+    }
+    return false;
+  }
+
+  Rect? _currentDragRectLocal() {
+    if (_dragStartLocal == null || _dragCurrentLocal == null) return null;
+    return Rect.fromPoints(_dragStartLocal!, _dragCurrentLocal!);
+  }
+
+  Rect? _localRectToGlobal(Rect? localRect) {
+    if (localRect == null) return null;
+    final ctx = _gestureSurfaceKey.currentContext;
+    if (ctx == null) return null;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null) return null;
+    final origin = box.localToGlobal(Offset.zero);
+    return localRect.shift(origin);
+  }
+
+  void _finishBoxSelection() {
+    final localRect = _currentDragRectLocal();
+    final globalRect = _localRectToGlobal(localRect);
+    final selected = <String>{};
+
+    if (globalRect != null) {
+      _messageRowRects.forEach((id, rowRect) {
+        if (rowRect.overlaps(globalRect)) {
+          selected.add(id);
+        }
+      });
+    }
+
+    if (selected.isNotEmpty) {
+      widget.onSetSelection(selected);
+    }
+
+    setState(() {
+      _dragStartLocal = null;
+      _dragCurrentLocal = null;
+      _dragArmed = false;
+      _isBoxSelecting = false;
+    });
+  }
+
+  void _cancelBoxSelection() {
+    if (!_dragArmed && !_isBoxSelecting) return;
+    setState(() {
+      _dragStartLocal = null;
+      _dragCurrentLocal = null;
+      _dragArmed = false;
+      _isBoxSelecting = false;
+    });
+  }
 
   Widget _buildListView() {
+    final aliveIds = widget.messages.map((m) => m.id).toSet();
+    _messageRowRects.removeWhere((id, _) => !aliveIds.contains(id));
+    _messageBubbleRects.removeWhere((id, _) => !aliveIds.contains(id));
+
     return ListView.builder(
       key: const PageStorageKey<String>('chat_message_list'),
       controller: widget.scroll,
@@ -1962,6 +2045,15 @@ class _MessageListState extends State<_MessageList> {
           onToggleSelection: () => widget.onToggleSelection(msg.id),
           onEnterSelectionMode: widget.onEnterSelectionMode,
           onDeleteMessage: () => widget.onDeleteMessage(msg.id),
+          onActivateForTextActions: () {
+            _activeTextActionMessageId = msg.id;
+          },
+          onRowRectChanged: (rect) {
+            _messageRowRects[msg.id] = rect;
+          },
+          onBubbleRectChanged: (rect) {
+            _messageBubbleRects[msg.id] = rect;
+          },
         );
       },
     );
@@ -1978,35 +2070,119 @@ class _MessageListState extends State<_MessageList> {
       );
     }
 
-    final messageList = SelectionArea(
-      onSelectionChanged: (content) {
-        _hasGlobalSelection = content != null && content.plainText.isNotEmpty;
-      },
-      contextMenuBuilder: (context, selectableRegionState) {
-        final hasCopy = selectableRegionState.contextMenuButtonItems.any(
-          (b) => b.type == ContextMenuButtonType.copy,
-        );
+    final listContent = widget.isSelectionMode
+        ? _buildListView()
+        : SelectionArea(
+            onSelectionChanged: (content) {
+              _hasGlobalSelection =
+                  content != null && content.plainText.isNotEmpty;
+            },
+            contextMenuBuilder: (context, selectableRegionState) {
+              final hasCopy = selectableRegionState.contextMenuButtonItems.any(
+                (b) => b.type == ContextMenuButtonType.copy,
+              );
 
-        if (!hasCopy) {
-          // 如果未选中文本，不显示系统复制等默认菜单（返回空）
-          return const SizedBox.shrink();
+              if (!hasCopy) {
+                return const SizedBox.shrink();
+              }
+
+              final copyItem = selectableRegionState.contextMenuButtonItems
+                  .firstWhere((b) => b.type == ContextMenuButtonType.copy);
+              final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+              final targetMessageId = _activeTextActionMessageId;
+
+              return AdaptiveTextSelectionToolbar.buttonItems(
+                anchors: selectableRegionState.contextMenuAnchors,
+                buttonItems: [
+                  ContextMenuButtonItem(
+                    onPressed: copyItem.onPressed,
+                    type: ContextMenuButtonType.copy,
+                    label: '复制',
+                  ),
+                  if (isMobile && targetMessageId != null)
+                    ContextMenuButtonItem(
+                      onPressed: () {
+                        ContextMenuController.removeAny();
+                        widget.onDeleteMessage(targetMessageId);
+                      },
+                      label: '删除',
+                    ),
+                  if (isMobile && targetMessageId != null)
+                    ContextMenuButtonItem(
+                      onPressed: () {
+                        ContextMenuController.removeAny();
+                        widget.onEnterSelectionMode();
+                        widget.onSetSelection({targetMessageId});
+                      },
+                      label: '多选',
+                    ),
+                ],
+              );
+            },
+            child: _buildListView(),
+          );
+
+    final messageList = Listener(
+      key: _gestureSurfaceKey,
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if (event.kind != PointerDeviceKind.mouse) return;
+        if (event.buttons != kPrimaryMouseButton) return;
+
+        // 普通模式下：气泡内拖动专用于文字选择，不触发消息框选。
+        if (!widget.isSelectionMode && _pointInAnyBubble(event.position)) {
+          _cancelBoxSelection();
+          return;
         }
 
-        final copyItem = selectableRegionState.contextMenuButtonItems
-            .firstWhere((b) => b.type == ContextMenuButtonType.copy);
-
-        return AdaptiveTextSelectionToolbar.buttonItems(
-          anchors: selectableRegionState.contextMenuAnchors,
-          buttonItems: [
-            ContextMenuButtonItem(
-              onPressed: copyItem.onPressed,
-              type: ContextMenuButtonType.copy,
-              label: '复制',
-            ),
-          ],
-        );
+        setState(() {
+          _dragStartLocal = event.localPosition;
+          _dragCurrentLocal = event.localPosition;
+          _dragArmed = true;
+          _isBoxSelecting = false;
+        });
       },
-      child: _buildListView(),
+      onPointerMove: (event) {
+        if (!_dragArmed) return;
+        if (event.kind != PointerDeviceKind.mouse) return;
+        if (event.buttons != kPrimaryMouseButton) return;
+
+        final start = _dragStartLocal;
+        if (start == null) return;
+
+        final dx = (event.localPosition.dx - start.dx).abs();
+        final dy = (event.localPosition.dy - start.dy).abs();
+        final shouldStart = dx > 4 || dy > 4;
+
+        setState(() {
+          _dragCurrentLocal = event.localPosition;
+          if (shouldStart) {
+            _isBoxSelecting = true;
+          }
+        });
+      },
+      onPointerUp: (event) {
+        if (!_dragArmed) return;
+        if (_isBoxSelecting) {
+          _finishBoxSelection();
+        } else {
+          _cancelBoxSelection();
+        }
+      },
+      onPointerCancel: (_) => _cancelBoxSelection(),
+      child: Stack(
+        children: [
+          listContent,
+          if (_isBoxSelecting && _currentDragRectLocal() != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _SelectionMarqueePainter(_currentDragRectLocal()!),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
 
     return messageList;
@@ -2022,6 +2198,9 @@ class _BubbleItem extends StatefulWidget {
   final VoidCallback onToggleSelection;
   final VoidCallback onEnterSelectionMode;
   final VoidCallback onDeleteMessage;
+  final VoidCallback onActivateForTextActions;
+  final ValueChanged<Rect> onRowRectChanged;
+  final ValueChanged<Rect> onBubbleRectChanged;
 
   const _BubbleItem({
     super.key,
@@ -2033,6 +2212,9 @@ class _BubbleItem extends StatefulWidget {
     required this.onToggleSelection,
     required this.onEnterSelectionMode,
     required this.onDeleteMessage,
+    required this.onActivateForTextActions,
+    required this.onRowRectChanged,
+    required this.onBubbleRectChanged,
   });
 
   @override
@@ -2041,6 +2223,25 @@ class _BubbleItem extends StatefulWidget {
 
 class _BubbleItemState extends State<_BubbleItem> {
   bool _isHovered = false;
+  final GlobalKey _rowKey = GlobalKey();
+  final GlobalKey _bubbleContentKey = GlobalKey();
+
+  void _reportRects() {
+    final rowCtx = _rowKey.currentContext;
+    final rowBox = rowCtx?.findRenderObject() as RenderBox?;
+    if (rowBox != null && rowBox.hasSize) {
+      final rowRect = rowBox.localToGlobal(Offset.zero) & rowBox.size;
+      widget.onRowRectChanged(rowRect);
+    }
+
+    final bubbleCtx = _bubbleContentKey.currentContext;
+    final bubbleBox = bubbleCtx?.findRenderObject() as RenderBox?;
+    if (bubbleBox != null && bubbleBox.hasSize) {
+      final bubbleRect =
+          bubbleBox.localToGlobal(Offset.zero) & bubbleBox.size;
+      widget.onBubbleRectChanged(bubbleRect);
+    }
+  }
 
   bool get _isAttachmentBubble => widget.msg.content.startsWith('[附件] ');
   bool get _isImageBubble => widget.msg.content.startsWith('[图片] ');
@@ -2241,6 +2442,7 @@ class _BubbleItemState extends State<_BubbleItem> {
       children: [
         MarkdownBody(
           data: widget.msg.content,
+          // 文本选择统一交给列表层 SelectionArea，避免嵌套选择器造成跨空格/跨气泡拖选异常。
           selectable: false,
           styleSheet: MarkdownStyleSheet(
             p: TextStyle(color: textColor, fontSize: 14, height: 1.4),
@@ -2452,7 +2654,13 @@ class _BubbleItemState extends State<_BubbleItem> {
         ? DateFormat('MM-dd HH:mm:ss').format(widget.msg.time)
         : DateFormat('yyyy-MM-dd HH:mm:ss').format(widget.msg.time);
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _reportRects();
+    });
+
     Widget bubbleWidget = Padding(
+      key: _rowKey,
       padding: const EdgeInsets.only(bottom: 6),
       child: MouseRegion(
         onEnter: (_) => setState(() => _isHovered = true),
@@ -2482,6 +2690,7 @@ class _BubbleItemState extends State<_BubbleItem> {
             ),
             Listener(
               onPointerDown: (event) {
+                widget.onActivateForTextActions();
                 if (event.kind == PointerDeviceKind.mouse &&
                     event.buttons == kSecondaryMouseButton &&
                     !widget.isSelectionMode &&
@@ -2525,6 +2734,7 @@ class _BubbleItemState extends State<_BubbleItem> {
                       ],
                       Flexible(
                         child: Container(
+                          key: _bubbleContentKey,
                           constraints: BoxConstraints(
                             maxWidth: MediaQuery.of(context).size.width <= 640
                                 ? MediaQuery.of(context).size.width * 0.78
@@ -2575,6 +2785,38 @@ class _BubbleItemState extends State<_BubbleItem> {
       ),
     );
     return bubbleWidget;
+  }
+}
+
+class _SelectionMarqueePainter extends CustomPainter {
+  final Rect rect;
+
+  _SelectionMarqueePainter(this.rect);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final normalized = Rect.fromLTRB(
+      rect.left < rect.right ? rect.left : rect.right,
+      rect.top < rect.bottom ? rect.top : rect.bottom,
+      rect.left > rect.right ? rect.left : rect.right,
+      rect.top > rect.bottom ? rect.top : rect.bottom,
+    );
+
+    final fillPaint = Paint()
+      ..color = const Color(0x334A90E2)
+      ..style = PaintingStyle.fill;
+    final borderPaint = Paint()
+      ..color = const Color(0xFF4A90E2)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+
+    canvas.drawRect(normalized, fillPaint);
+    canvas.drawRect(normalized, borderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SelectionMarqueePainter oldDelegate) {
+    return oldDelegate.rect != rect;
   }
 }
 

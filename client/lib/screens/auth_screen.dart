@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/ws_service.dart';
@@ -10,9 +12,33 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
+  bool _reconnectQueued = false;
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _isLoginMode = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ensureWsConnected();
+    });
+  }
+
+  void _ensureWsConnected() {
+    final ws = context.read<WsService>();
+    if (ws.status == WsStatus.disconnected && !_reconnectQueued) {
+      _reconnectQueued = true;
+      unawaited(
+        ws.connect().whenComplete(() {
+          if (mounted) {
+            _reconnectQueued = false;
+          }
+        }),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -42,6 +68,13 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   Widget build(BuildContext context) {
     final wsService = context.watch<WsService>();
+
+    if (wsService.status == WsStatus.disconnected && !_reconnectQueued) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _ensureWsConnected();
+      });
+    }
 
     if (wsService.isRestoringAuth) {
       return Scaffold(
@@ -123,7 +156,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 const Padding(
                   padding: EdgeInsets.only(top: 16),
                   child: Text(
-                    '正在连接服务器...',
+                    '正在连接服务器...（将自动重连）',
                     style: TextStyle(color: Colors.red),
                     textAlign: TextAlign.center,
                   ),
