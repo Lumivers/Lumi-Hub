@@ -472,6 +472,8 @@ class LumiHubAdapter(Platform):
             await self._handle_mcp_config_update(message, ws_session_id)
         elif msg_type == "PERSONA_CLEAR_HISTORY":
             await self._handle_persona_clear_history(message, ws_session_id)
+        elif msg_type == "MESSAGE_DELETE":
+            await self._handle_message_delete(message, ws_session_id)
         elif msg_type == "PERSONA_DELETE":
             await self._handle_persona_delete(message, ws_session_id)
         elif msg_type == "FILE_UPLOAD_INIT":
@@ -1193,6 +1195,53 @@ class LumiHubAdapter(Platform):
             await self.ws_server.send_to_client(ws_session_id, {
                 "message_id": msg_id, "type": "PERSONA_CLEAR_HISTORY_RESPONSE",
                 "source": "host", "target": "client",
+                "payload": {"status": "error", "message": str(e)}
+            })
+
+    async def _handle_message_delete(self, message: dict, ws_session_id: str) -> None:
+        """删除当前登录用户在指定人格下的指定消息。"""
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        user_id = self.active_sessions.get(ws_session_id)
+        payload = message.get("payload", {})
+        persona_id = payload.get("persona_id", "default")
+        message_ids = payload.get("message_ids", [])
+
+        if not user_id:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "MESSAGE_DELETE_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "payload": {"status": "error", "message": "未登录"}
+            })
+            return
+
+        if not isinstance(message_ids, list) or not message_ids:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "MESSAGE_DELETE_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "payload": {"status": "error", "message": "message_ids 不能为空"}
+            })
+            return
+
+        try:
+            deleted_count = self.db.delete_messages(user_id=user_id, message_ids=message_ids, persona_id=persona_id)
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "MESSAGE_DELETE_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "payload": {"status": "success", "deleted_count": deleted_count}
+            })
+        except Exception as e:
+            logger.error(f"[Lumi-Hub] 删除消息失败: {e}")
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "MESSAGE_DELETE_RESPONSE",
+                "source": "host",
+                "target": "client",
                 "payload": {"status": "error", "message": str(e)}
             })
 

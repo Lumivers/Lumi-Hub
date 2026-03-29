@@ -76,6 +76,22 @@ class WsService extends ChangeNotifier {
   String _activePersonaId = '';
   String get activePersonaId => _activePersonaId;
 
+  String _assistantMsgId(String msgId) => '${msgId}_ai';
+
+  String _mergeAssistantContent(String existing, String incoming) {
+    if (incoming.isEmpty) return existing;
+    if (existing.isEmpty) return incoming;
+    if (existing.endsWith(incoming)) return existing;
+
+    final maxOverlap = min(existing.length, incoming.length);
+    for (var overlap = maxOverlap; overlap > 0; overlap--) {
+      if (existing.endsWith(incoming.substring(0, overlap))) {
+        return existing + incoming.substring(overlap);
+      }
+    }
+    return existing + incoming;
+  }
+
   // 人格操作响应流
   final _personaController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get personaResponses =>
@@ -341,6 +357,7 @@ class WsService extends ChangeNotifier {
           break;
         case 'PERSONA_SWITCH':
         case 'PERSONA_CLEAR_HISTORY_RESPONSE':
+        case 'MESSAGE_DELETE_RESPONSE':
         case 'PERSONA_DELETE_RESPONSE':
           _personaController.add(data);
           break;
@@ -358,11 +375,12 @@ class WsService extends ChangeNotifier {
     if (content.isEmpty) return;
 
     final msgId = data['message_id'] as String? ?? _genId();
+    final assistantId = _assistantMsgId(msgId);
     final isFromStreaming = _streamingMsgIds.contains(msgId);
 
     // 如果已经在流式拼接同一条消息，则以最终内容覆盖，避免重复插入。
     final existingIndex = _messages.indexWhere(
-      (m) => m.id == msgId && m.sender == MessageSender.ai,
+      (m) => m.id == assistantId && m.sender == MessageSender.ai,
     );
     if (existingIndex != -1) {
       final existing = _messages[existingIndex];
@@ -371,7 +389,7 @@ class WsService extends ChangeNotifier {
       // 若来自 CHAT_STREAM_CHUNK 流程，则最终 CHAT_RESPONSE 以完整文本覆盖。
       final nextContent = isFromStreaming
           ? content
-          : (_isGenerating ? '${existing.content}$content' : content);
+          : _mergeAssistantContent(existing.content, content);
 
       _messages[existingIndex] = existing.copyWith(
         content: nextContent,
@@ -388,7 +406,7 @@ class WsService extends ChangeNotifier {
     _messages.removeWhere((m) => m.isTyping);
     _messages.add(
       ChatMessage(
-        id: msgId,
+          id: assistantId,
         content: content,
         sender: MessageSender.ai,
         time: DateTime.now(),
@@ -403,6 +421,7 @@ class WsService extends ChangeNotifier {
     final chunk = payload['chunk'] as String? ?? '';
     final finished = payload['finished'] == true;
     final msgId = data['message_id'] as String? ?? _genId();
+    final assistantId = _assistantMsgId(msgId);
 
     // 结束帧只负责状态收口。
     if (finished) {
@@ -420,13 +439,13 @@ class WsService extends ChangeNotifier {
     _messages.removeWhere((m) => m.isTyping);
 
     final existingIndex = _messages.indexWhere(
-      (m) => m.id == msgId && m.sender == MessageSender.ai,
+      (m) => m.id == assistantId && m.sender == MessageSender.ai,
     );
 
     if (existingIndex == -1) {
       _messages.add(
         ChatMessage(
-          id: msgId,
+          id: assistantId,
           content: chunk,
           sender: MessageSender.ai,
           time: DateTime.now(),
@@ -435,7 +454,7 @@ class WsService extends ChangeNotifier {
     } else {
       final existing = _messages[existingIndex];
       _messages[existingIndex] = existing.copyWith(
-        content: '${existing.content}$chunk',
+        content: _mergeAssistantContent(existing.content, chunk),
         isTyping: false,
       );
     }
@@ -883,6 +902,18 @@ class WsService extends ChangeNotifier {
     if (messageIds.isEmpty) return;
     _messages.removeWhere((m) => messageIds.contains(m.id));
     notifyListeners();
+
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'MESSAGE_DELETE',
+      'source': 'client',
+      'target': 'host',
+      'payload': {
+        'persona_id': _activePersonaId,
+        'message_ids': messageIds.toList(),
+      },
+    });
   }
 
   /// 清空本地消息列表（配合清空历史记录使用）

@@ -60,7 +60,7 @@ class LumiMessageEvent(AstrMessageEvent):
 
         text = self._chain_to_text(message)
         if not text.strip():
-            await super().send(MessageChain([]))
+            logger.info("[Lumi-Hub] 跳过空回复，避免写入空 assistant 消息")
             return
             
         # 暂时将完整的 JSON 直接透传给前端，或者什么都不做
@@ -80,11 +80,16 @@ class LumiMessageEvent(AstrMessageEvent):
         }
 
         if self._db and self._user_id:
-            self._db.save_message(user_id=self._user_id, role="assistant", content=text, persona_id=self._persona_id)
+            self._db.save_message(
+                user_id=self._user_id,
+                role="assistant",
+                content=text,
+                client_msg_id=f"{getattr(self.message_obj, 'message_id', str(uuid.uuid4()))}_ai",
+                persona_id=self._persona_id,
+            )
 
         logger.info(f"[Lumi-Hub] 发送 LLM 回复 (session={self._ws_session_id}): {text[:80]}{'...' if len(text) > 80 else ''}") 
         await self._ws_server.send_to_client(self._ws_session_id, response)
-        await super().send(MessageChain([]))
 
     async def send_streaming(
         self, generator: AsyncGenerator[MessageChain, None], use_fallback: bool = False
@@ -151,17 +156,18 @@ class LumiMessageEvent(AstrMessageEvent):
         }
         
         if self._db and self._user_id:
-            self._db.save_message(user_id=self._user_id, role="assistant", content=full_text, persona_id=self._persona_id)
+            self._db.save_message(
+                user_id=self._user_id,
+                role="assistant",
+                content=full_text,
+                client_msg_id=f"{msg_id}_ai",
+                persona_id=self._persona_id,
+            )
 
         await self._ws_server.send_to_client(self._ws_session_id, final_msg)
 
         logger.info(f"[Lumi-Hub] 流式回复完成 (session={self._ws_session_id}): {full_text[:80]}...")
-        # 生成器已在上方的 async for 循环中耗尽，不能再传给父类。
-        # 此处传一个空的异步生成器以满足父类接口要求。
-        async def _empty_gen():
-            return
-            yield  # noqa: make this an async generator
-        await super().send_streaming(_empty_gen(), use_fallback)
+        # 不再向父类二次回传，避免额外处理链路导致延迟及重复上下文风险。
 
     async def wait_for_auth(self, action_type: str, target_path: str, description: str, tool_name: str = "", diff_preview: str = "") -> bool:
         """

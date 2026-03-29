@@ -264,6 +264,41 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  Future<void> _confirmDeleteMessages(WsService ws, Set<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    final count = messageIds.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除消息'),
+        content: Text(count == 1 ? '确定删除这条消息吗？' : '确定删除选中的 $count 条消息吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      ws.removeMessages(messageIds);
+      if (!mounted) return;
+      if (_isSelectionMode) {
+        setState(() {
+          _selectedMessageIds.removeAll(messageIds);
+          if (_selectedMessageIds.isEmpty) {
+            _isSelectionMode = false;
+          }
+        });
+      }
+    }
+  }
+
   Future<void> _onAttach(WsService ws) async {
     if (_isUploadingAttachment) return;
 
@@ -397,7 +432,7 @@ class _ChatScreenState extends State<ChatScreen> {
               if (!_isSelectionMode) _toggleSelectionMode();
             },
             onDeleteMessage: (msgId) {
-              ws.removeMessages({msgId});
+              unawaited(_confirmDeleteMessages(ws, {msgId}));
             },
           ),
         ),
@@ -706,7 +741,7 @@ class _SidebarState extends State<_Sidebar> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除人格'),
-        content: Text('确认从 AstrBot 中删除人格「$personaId」？'),
+        content: Text('确认从 AstrBot 中删除人格「$personaId」？\n此操作不可恢复。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
