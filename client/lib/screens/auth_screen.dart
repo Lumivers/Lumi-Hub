@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../services/app_settings.dart';
+import 'components/connection_settings_dialog.dart';
 import '../services/ws_service.dart';
 
 class AuthScreen extends StatefulWidget {
@@ -16,6 +19,26 @@ class _AuthScreenState extends State<AuthScreen> {
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _isLoginMode = true;
+
+  Future<void> _openConnectionSettings() async {
+    final ws = context.read<WsService>();
+    final settings = context.read<AppSettings>();
+
+    final changed = await ConnectionSettingsDialog.show(
+      context,
+      ws: ws,
+      settings: settings,
+      title: '服务器连接设置',
+      confirmText: '保存并重连',
+      reconnectIfConnected: true,
+    );
+
+    if (!mounted || !changed) return;
+
+    if (ws.status == WsStatus.disconnected) {
+      _ensureWsConnected();
+    }
+  }
 
   @override
   void initState() {
@@ -106,6 +129,15 @@ class _AuthScreenState extends State<AuthScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _openConnectionSettings,
+                  icon: const Icon(Icons.settings_ethernet),
+                  label: const Text('服务器设置'),
+                ),
+              ),
+              const SizedBox(height: 8),
               Text(
                 _isLoginMode ? '欢迎回到 Lumi-Hub' : '注册新账号',
                 style: const TextStyle(
@@ -153,12 +185,22 @@ class _AuthScreenState extends State<AuthScreen> {
                 child: Text(_isLoginMode ? '没有账号？点击注册' : '已有账号？返回登录'),
               ),
               if (wsService.status != WsStatus.connected)
-                const Padding(
-                  padding: EdgeInsets.only(top: 16),
-                  child: Text(
-                    '正在连接服务器...（将自动重连）',
-                    style: TextStyle(color: Colors.red),
-                    textAlign: TextAlign.center,
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Column(
+                    children: [
+                      const Text(
+                        '正在连接服务器...（将自动重连）',
+                        style: TextStyle(color: Colors.red),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: _openConnectionSettings,
+                        icon: const Icon(Icons.edit_location_alt_outlined),
+                        label: const Text('修改连接地址'),
+                      ),
+                    ],
                   ),
                 ),
             ],

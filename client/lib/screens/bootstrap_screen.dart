@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'components/connection_settings_dialog.dart';
 import '../services/app_settings.dart';
 import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
@@ -68,213 +69,41 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
   Future<void> _showConnectionModeDialog(BuildContext context) async {
     final ws = context.read<WsService>();
     final settings = context.read<AppSettings>();
-    var selected = settings.connectionMode;
-    var askEachLaunch = settings.askConnectionModeOnLaunch;
-    String? validationText;
-    String lanInput = '';
-    String publicInput = '';
-
-    final localModeLabel = _supportsLocalHostLifecycle
-        ? '本机启动 Host (127.0.0.1)'
-        : 'USB 调试转发 (127.0.0.1)';
-
-    await showDialog<void>(
-      context: context,
+    await ConnectionSettingsDialog.show(
+      context,
+      ws: ws,
+      settings: settings,
+      title: '选择连接方式',
+      confirmText: '确认并继续',
       barrierDismissible: false,
-      builder: (dialogContext) {
-        final bottomInset = MediaQuery.of(dialogContext).viewInsets.bottom;
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              scrollable: true,
-              title: const Text('选择连接方式'),
-              content: AnimatedPadding(
-                duration: const Duration(milliseconds: 120),
-                curve: Curves.easeOut,
-                padding: EdgeInsets.only(bottom: bottomInset > 0 ? 8 : 0),
-                child: SizedBox(
-                  width: (MediaQuery.of(dialogContext).size.width * 0.9).clamp(
-                    280.0,
-                    460.0,
-                  ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(dialogContext).size.height *
-                          (bottomInset > 0 ? 0.48 : 0.62),
-                    ),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          RadioListTile<ConnectionMode>(
-                            value: ConnectionMode.localOrUsb,
-                            groupValue: selected,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(localModeLabel),
-                            subtitle: Text(
-                              _supportsLocalHostLifecycle
-                                  ? '适合电脑端本机启动 AstrBot'
-                                  : '需 adb reverse tcp:8765 tcp:8765',
-                            ),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() => selected = value);
-                            },
-                          ),
-                          RadioListTile<ConnectionMode>(
-                            value: ConnectionMode.lan,
-                            groupValue: selected,
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('局域网'),
-                            subtitle: const Text('手动填写局域网地址'),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                selected = value;
-                                validationText = null;
-                              });
-                            },
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              left: 12,
-                              right: 12,
-                              bottom: 8,
-                            ),
-                            child: TextField(
-                              enabled: selected == ConnectionMode.lan,
-                              onChanged: (value) => lanInput = value,
-                              onTap: () {
-                                if (selected != ConnectionMode.lan) {
-                                  setState(() {
-                                    selected = ConnectionMode.lan;
-                                    validationText = null;
-                                  });
-                                }
-                              },
-                              decoration: const InputDecoration(
-                                hintText: '示例: ws://192.168.1.23:8765',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          RadioListTile<ConnectionMode>(
-                            value: ConnectionMode.publicTunnel,
-                            groupValue: selected,
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('公网/内网穿透'),
-                            subtitle: const Text('手动填写公网地址'),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                selected = value;
-                                validationText = null;
-                              });
-                            },
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              left: 12,
-                              right: 12,
-                              bottom: 8,
-                            ),
-                            child: TextField(
-                              enabled: selected == ConnectionMode.publicTunnel,
-                              onChanged: (value) => publicInput = value,
-                              onTap: () {
-                                if (selected != ConnectionMode.publicTunnel) {
-                                  setState(() {
-                                    selected = ConnectionMode.publicTunnel;
-                                    validationText = null;
-                                  });
-                                }
-                              },
-                              decoration: const InputDecoration(
-                                hintText: '示例: wss://chat.example.com/ws',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('每次启动都询问'),
-                            subtitle: const Text('关闭后将记住当前选择并自动连接'),
-                            value: askEachLaunch,
-                            onChanged: (value) {
-                              setState(() => askEachLaunch = value);
-                            },
-                          ),
-                          if (validationText != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(
-                                validationText!,
-                                style: TextStyle(
-                                  color: Theme.of(context).colorScheme.error,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              actions: [
-                FilledButton(
-                  onPressed: () async {
-                    String? customUrl;
-                    if (selected == ConnectionMode.lan) {
-                      final entered = lanInput.trim();
-                      customUrl = entered.isEmpty ? null : entered;
-                      if (customUrl == null && _isLocalHostUrl(ws.serverUrl)) {
-                        setState(() {
-                          validationText = '当前仍是本机地址，请输入局域网地址。';
-                        });
-                        return;
-                      }
-                    } else if (selected == ConnectionMode.publicTunnel) {
-                      final entered = publicInput.trim();
-                      customUrl = entered.isEmpty ? null : entered;
-                      if (customUrl == null && _isLocalHostUrl(ws.serverUrl)) {
-                        setState(() {
-                          validationText = '当前仍是本机地址，请输入公网地址。';
-                        });
-                        return;
-                      }
-                    }
+      allowCancel: false,
+    );
+  }
 
-                    try {
-                      await _applyConnectionMode(
-                        ws,
-                        settings,
-                        selected,
-                        customUrl,
-                      );
-                    } on FormatException catch (e) {
-                      setState(() {
-                        validationText = e.message;
-                      });
-                      return;
-                    }
+  Future<void> _openConnectionSettings() async {
+    final ws = context.read<WsService>();
+    final settings = context.read<AppSettings>();
+    final changed = await ConnectionSettingsDialog.show(
+      context,
+      ws: ws,
+      settings: settings,
+      title: '连接设置',
+      confirmText: '保存设置',
+      barrierDismissible: true,
+      allowCancel: true,
+    );
 
-                    settings.setAskConnectionModeOnLaunch(askEachLaunch);
-                    if (dialogContext.mounted) {
-                      Navigator.of(dialogContext).pop();
-                    }
-                  },
-                  child: const Text('确认并继续'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    if (!mounted || !changed) return;
+
+    final bootstrap = context.read<BootstrapService>();
+    if (bootstrap.hasFailed) {
+      await bootstrap.retry();
+      return;
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('连接设置已保存，下次连接将使用新地址。')),
     );
   }
 
@@ -420,7 +249,13 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                         style: const TextStyle(fontSize: 12),
                       ),
                     ),
-                  if (bootstrap.hasFailed) const Spacer(),
+                    if (bootstrap.hasFailed) const Spacer(),
+                    OutlinedButton.icon(
+                      onPressed: _openConnectionSettings,
+                      icon: const Icon(Icons.tune, size: 16),
+                      label: const Text('连接设置'),
+                    ),
+                    if (bootstrap.hasFailed) const SizedBox(width: 8),
                   if (bootstrap.hasFailed)
                     FilledButton.icon(
                       onPressed: bootstrap.retry,

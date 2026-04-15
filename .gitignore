@@ -34,3 +34,5 @@ sync.py
 # 允许文档
 !README.md
 !readme.md
+
+/voiceclone
