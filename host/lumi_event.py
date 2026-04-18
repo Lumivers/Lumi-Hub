@@ -63,8 +63,7 @@ class LumiMessageEvent(AstrMessageEvent):
             logger.info("[Lumi-Hub] 跳过空回复，避免写入空 assistant 消息")
             return
             
-        # 暂时将完整的 JSON 直接透传给前端，或者什么都不做
-        # 后续 MCP 架构中，这里将不再负责“拦截”，而是由专门的 Agent 链处理。
+        # 当前策略：直接透传标准 CHAT_RESPONSE 包给前端。
 
         response = {
             "message_id": getattr(self.message_obj, "message_id", str(uuid.uuid4())),
@@ -80,6 +79,7 @@ class LumiMessageEvent(AstrMessageEvent):
         }
 
         if self._db and self._user_id:
+            # assistant 消息持久化到 DB，供历史记录分页读取。
             self._db.save_message(
                 user_id=self._user_id,
                 role="assistant",
@@ -126,7 +126,7 @@ class LumiMessageEvent(AstrMessageEvent):
             await self._ws_server.send_to_client(self._ws_session_id, chunk_msg)
             chunk_index += 1
 
-        # 发送完成标记
+        # 发送完成标记，告知前端结束流式拼接。
         finish_msg = {
             "message_id": msg_id,
             "type": "CHAT_STREAM_CHUNK",
@@ -141,7 +141,7 @@ class LumiMessageEvent(AstrMessageEvent):
         }
         await self._ws_server.send_to_client(self._ws_session_id, finish_msg)
 
-        # 发送完整的最终回复
+        # 发送最终聚合文本，兼容依赖完整响应的前端逻辑。
         final_msg = {
             "message_id": msg_id,
             "type": "CHAT_RESPONSE",
@@ -167,7 +167,7 @@ class LumiMessageEvent(AstrMessageEvent):
         await self._ws_server.send_to_client(self._ws_session_id, final_msg)
 
         logger.info(f"[Lumi-Hub] 流式回复完成 (session={self._ws_session_id}): {full_text[:80]}...")
-        # 不再向父类二次回传，避免额外处理链路导致延迟及重复上下文风险。
+        # 不再向父类二次回传，避免重复输出与额外延迟。
 
     async def wait_for_auth(self, action_type: str, target_path: str, description: str, tool_name: str = "", diff_preview: str = "") -> bool:
         """
@@ -201,7 +201,7 @@ class LumiMessageEvent(AstrMessageEvent):
         logger.info(f"[Lumi-Hub] 已发送审批请求 ({action_type}): {target_path}")
         await self._ws_server.send_to_client(self._ws_session_id, auth_req)
 
-        # 进入异步等待
+        # 进入异步等待：基于 message_id 关联审批结果。
         resp = await self._ws_server.wait_for_response(self._ws_session_id, auth_msg_id, timeout=60)
         
         if not resp:

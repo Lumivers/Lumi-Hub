@@ -1,5 +1,6 @@
 part of 'chat_screen.dart';
 
+// 侧栏人格条目：展示状态、支持拖拽和快捷菜单。
 class _PersonaTile extends StatefulWidget {
   final String personaId;
   final bool isSelected;
@@ -35,6 +36,7 @@ class _PersonaTileState extends State<_PersonaTile> {
   }
 
   void _showMenu(BuildContext context) async {
+    // 右上角菜单只暴露两个高频操作：清空历史、删除人格。
     final box = context.findRenderObject() as RenderBox;
     final pos = box.localToGlobal(Offset(box.size.width, 0));
 
@@ -193,6 +195,7 @@ class _SettingsDialog extends StatelessWidget {
     BuildContext context,
     ConnectionMode mode,
   ) async {
+    // 与启动页保持同一套连接模式语义，避免配置歧义。
     final settings = context.read<AppSettings>();
     final currentUrl = ws.serverUrl;
     String nextUrl = currentUrl;
@@ -435,6 +438,7 @@ class _SettingsDialog extends StatelessWidget {
     final dialogWidth = (screen.width * 0.94).clamp(320.0, 560.0);
     final dialogMaxHeight = screen.height * 0.78;
 
+    // 大而全设置面板：集中管理账号、窗口行为、连接与语音相关配置。
     return AlertDialog(
       backgroundColor: colors.sidebar,
       title: Text(

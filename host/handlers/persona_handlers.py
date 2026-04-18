@@ -8,12 +8,18 @@ from astrbot.core import db_helper
 
 
 class PersonaHandlersMixin:
+    """人格与消息管理能力。
+
+    包含人格切换、列表查询、删除、清空历史，以及按消息 ID 删除记录。
+    """
+
     async def _handle_persona_switch(self, message: dict, ws_session_id: str) -> None:
         """处理人格切换请求：真实切换 AstrBot 的默认人格。"""
         payload = message.get("payload", {})
         persona_id = payload.get("persona_id", "default")
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
 
+        # 通过共享状态拿到 AstrBot 的 persona_manager，并更新默认人格。
         pm = self._shared_state.get("persona_manager")
         if pm:
             try:
@@ -59,6 +65,7 @@ class PersonaHandlersMixin:
             )
             return
         try:
+            # clear_messages 仅影响当前 user_id + persona_id 的会话范围。
             count = self.db.clear_messages(user_id, persona_id)
             logger.info(f"[Lumi-Hub] 用户 {user_id} 对人格 {persona_id} 的聊天记录已清空，共 {count} 条")
             await self.ws_server.send_to_client(
@@ -105,6 +112,7 @@ class PersonaHandlersMixin:
             )
             return
 
+        # message_ids 由前端显式传入，空列表视为无效请求。
         if not isinstance(message_ids, list) or not message_ids:
             await self.ws_server.send_to_client(
                 ws_session_id,
@@ -153,6 +161,7 @@ class PersonaHandlersMixin:
         persona_id = payload.get("persona_id", "")
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
 
+        # 删除操作直接委托给 persona_manager，确保与 AstrBot 内部状态一致。
         pm = self._shared_state.get("persona_manager")
         if pm and persona_id:
             try:
@@ -201,6 +210,7 @@ class PersonaHandlersMixin:
             personas = await db_helper.get_personas()
             persona_list = []
             for p in personas:
+                # 仅回传系统提示词预览，避免前端一次加载过长文本。
                 persona_list.append(
                     {
                         "id": p.persona_id,

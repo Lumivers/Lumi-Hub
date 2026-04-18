@@ -379,6 +379,8 @@ class LumiHubAdapter(
         self._voice_turn_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._shared_state = _lumi_shared_state
         self._setup_voice_extensions()
+        # WebSocket 业务消息路由表：前端 type -> 对应处理函数。
+        # 约定：仅在这里维护入口映射，具体处理逻辑分散在各个 mixin 中。
         self._message_handlers: dict[
             str, Callable[[dict, str], Coroutine[Any, Any, None]]
         ] = {
@@ -557,6 +559,7 @@ class LumiHubAdapter(
         """处理从 WebSocket Client 收到的业务消息。"""
         msg_type = message.get("type", "")
 
+        # 统一从路由表分发，避免 if-elif 链持续膨胀。
         handler = self._message_handlers.get(msg_type)
         if handler is None:
             logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
@@ -566,7 +569,10 @@ class LumiHubAdapter(
 
     async def _handle_ws_disconnect(self, ws_session_id: str) -> None:
         """WebSocket 断开后的资源清理。"""
+        # 1) 清理鉴权会话映射
         self.active_sessions.pop(ws_session_id, None)
+
+        # 2) 取消语音会话与正在执行的语音任务
         active_turn = await self.speech_sessions.clear_session(ws_session_id)
         if active_turn:
             await self.voice_registry.cancel_all(ws_session_id, active_turn)
@@ -579,6 +585,7 @@ class LumiHubAdapter(
             if task and not task.done():
                 task.cancel()
 
+        # 3) 删除断连会话未完成的上传临时数据
         stale_upload_ids = [
             upload_id
             for upload_id, session in self.upload_sessions.items()

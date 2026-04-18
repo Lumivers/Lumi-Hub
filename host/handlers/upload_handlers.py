@@ -77,6 +77,7 @@ class UploadHandlersMixin:
         )
 
     def _discard_upload_session(self, upload_id: str) -> None:
+        # 丢弃会话时同步清理临时分片文件，避免磁盘残留。
         session = self.upload_sessions.pop(upload_id, None)
         if not session:
             return
@@ -88,6 +89,7 @@ class UploadHandlersMixin:
             logger.warning(f"[Lumi-Hub] 清理临时上传文件失败: {e}")
 
     async def _handle_file_upload_init(self, message: dict, ws_session_id: str) -> None:
+        # init 阶段：校验元信息并创建 upload_id + 临时文件。
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         user_id = self.active_sessions.get(ws_session_id)
         if not user_id:
@@ -147,6 +149,7 @@ class UploadHandlersMixin:
         )
 
     async def _handle_file_upload_chunk(self, message: dict, ws_session_id: str) -> None:
+        # chunk 阶段：逐片校验并追加写入临时文件。
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         payload = message.get("payload", {})
         upload_id = str(payload.get("upload_id", "") or "")
@@ -173,6 +176,7 @@ class UploadHandlersMixin:
             return
 
         session["received_bytes"] += len(chunk_bytes)
+        # 强约束：接收总字节不能超过 init 声明值。
         if session["received_bytes"] > session["size_bytes"]:
             self._discard_upload_session(upload_id)
             await self._send_upload_error(ws_session_id, msg_id, "接收字节超过声明大小", upload_id)
@@ -205,6 +209,7 @@ class UploadHandlersMixin:
         )
 
     async def _handle_file_upload_complete(self, message: dict, ws_session_id: str) -> None:
+        # complete 阶段：校验长度/哈希，落正式目录并写附件元数据。
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         payload = message.get("payload", {})
         upload_id = str(payload.get("upload_id", "") or "")

@@ -20,6 +20,7 @@ class DashScopeTTSProvider(VoiceTTSProvider):
         websocket_url: str = "",
         http_url: str = "",
     ) -> None:
+        # 运行期可覆盖 env key，便于前端设置页动态下发。
         self.model = model
         self.default_voice = default_voice
         self.api_key_env = api_key_env
@@ -68,6 +69,7 @@ class DashScopeTTSProvider(VoiceTTSProvider):
             self._cancelled_turns.discard((ws_session_id, turn_id))
 
     async def synthesize_stream(self, request: TTSRequest):
+        # 主流程：校验 -> 调用 DashScope -> 按 chunk_bytes 切片输出。
         api_key = self._resolve_api_key()
         if not api_key:
             raise VoiceProviderError(
@@ -98,6 +100,7 @@ class DashScopeTTSProvider(VoiceTTSProvider):
         text_to_speak = request.ssml if request.use_ssml and request.ssml else request.text
 
         def _blocking_call() -> bytes:
+            # 官方 SDK 同步调用，放在线程池中避免阻塞事件循环。
             synthesizer = SpeechSynthesizer(model=self.model, voice=voice_id)
             return synthesizer.call(text_to_speak)
 
@@ -116,6 +119,7 @@ class DashScopeTTSProvider(VoiceTTSProvider):
             await self._clear_cancelled(request.ws_session_id, request.turn_id)
             return
 
+        # 限制分片大小范围，兼顾延迟和传输开销。
         chunk_size = max(4096, min(int(request.chunk_bytes or 32768), 262144))
         seq = 0
         for offset in range(0, len(audio_data), chunk_size):

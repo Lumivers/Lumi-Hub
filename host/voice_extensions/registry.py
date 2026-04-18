@@ -7,6 +7,7 @@ from .base import VoiceTTSProvider
 
 class VoiceExtensionRegistry:
     def __init__(self) -> None:
+        # provider_name -> provider 实例
         self._tts_providers: dict[str, VoiceTTSProvider] = {}
         self._default_tts_provider: str = ""
 
@@ -34,5 +35,6 @@ class VoiceExtensionRegistry:
         return sorted(self._tts_providers.keys())
 
     async def cancel_all(self, ws_session_id: str, turn_id: str) -> None:
+        # 广播中断请求给全部 provider，保持行为一致。
         for provider in self._tts_providers.values():
             await provider.cancel(ws_session_id, turn_id)

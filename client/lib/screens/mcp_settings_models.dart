@@ -2,6 +2,7 @@ part of 'mcp_settings_screen.dart';
 
 enum McpServerType { stdio, http }
 
+// 编辑器内部使用的草稿对象：统一承载 stdio/http 两类字段。
 class McpServerDraft {
   String name;
   McpServerType type;
@@ -28,6 +29,7 @@ class McpServerDraft {
 
   /// Build the JSON config map for this server.
   Map<String, dynamic> toConfig() {
+    // 输出为 Host 侧可直接消费的 mcpServers 子配置。
     if (type == McpServerType.http) {
       return {
         'type': 'http',
@@ -52,6 +54,7 @@ class McpServerDraft {
 
   /// Build from existing config map.
   factory McpServerDraft.fromConfig(String name, Map<String, dynamic> cfg) {
+    // 兼容历史数据：SSE 或仅含 url 的配置也视为 http 类型。
     final rawType = cfg['type'] as String? ?? '';
     final isHttp =
         rawType == 'http' ||

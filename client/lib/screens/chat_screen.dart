@@ -28,7 +28,6 @@ part 'chat_screen_message_list.dart';
 part 'chat_screen_message_bubbles.dart';
 part 'chat_screen_input_bar.dart';
 
-
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -72,7 +71,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    // 监听审批请求
+    // 页面启动后统一注册 WS 事件监听：审批、语音事件与消息变化。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ws = context.read<WsService>();
       _authSubscription = ws.authRequests.listen(_handleAuthRequest);
@@ -81,6 +80,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _lastGeneratingState = ws.isGenerating;
       _wsListener = () {
         if (!mounted) return;
+        // 清理已被删除消息对应的本地 TTS 状态，防止集合残留。
         final aliveIds = ws.messages.map((m) => m.id).toSet();
         _ttsReadyMessageIds.removeWhere((id) => !aliveIds.contains(id));
         _ttsGeneratingMessageIds.removeWhere((id) => !aliveIds.contains(id));
@@ -99,6 +99,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _pendingInitialBottom = true;
         }
 
+        // 新消息增长时，若用户在底部附近则自动贴底。
         final grew = count > _lastMessageCount;
         if (grew && !_loadingOlder) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -173,6 +174,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final settings = context.read<AppSettings>();
     if (!settings.enableAiVoiceOutput) return;
 
+    // 仅在“本轮生成刚结束”时尝试自动朗读，避免每次 setState 都触发。
     if (!(_lastGeneratingState && !ws.isGenerating)) {
       return;
     }
@@ -210,6 +212,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _onReadAloudTap(WsService ws, ChatMessage msg) async {
+    // 点同一条且正在播放时，行为切换为“停止”。
     if (msg.isTyping || msg.content.trim().isEmpty) return;
 
     if (ws.playingTtsTurnId == msg.id && ws.isTtsPlaying) {
@@ -295,6 +298,7 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scroll.hasClients) {
+            // 翻页后修正滚动位置，保持视觉锚点不跳。
             final afterMax = _scroll.position.maxScrollExtent;
             final delta = afterMax - beforeMax;
             final target = (beforePixels + delta).clamp(
@@ -347,6 +351,7 @@ class _ChatScreenState extends State<ChatScreen> {
         : const <Map<String, dynamic>>[];
     if (text.isEmpty && attachments.isEmpty) return;
 
+    // 文本与附件统一走 sendMessage，具体拆分在 WsService 内完成。
     ws.sendMessage(text, attachments: attachments);
     if (ws.isTtsPlaying) {
       unawaited(ws.stopTtsAudio());
@@ -482,6 +487,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    // 进入“上传中”UI 状态。
     setState(() {
       _pendingFileName = file.name;
       _isUploadingAttachment = true;
@@ -502,6 +508,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       setState(() {
+        // 上传成功后仅缓存附件，不立即发送；由用户按发送键触发。
         _uploadedAttachment = attachment;
         _isUploadingAttachment = false;
         _uploadProgress = 1;

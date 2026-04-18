@@ -81,6 +81,7 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
   @override
   void initState() {
     super.initState();
+    // 初始值来自已保存配置，输入框按当前地址做预填充。
     _selectedMode = widget.settings.connectionMode;
     _askEachLaunch = widget.settings.askConnectionModeOnLaunch;
     _prefillAddressInputs();
@@ -110,11 +111,13 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
   }
 
   Future<void> _applyConnectionMode(String? customUrl) async {
+    // 将“连接模式”映射为 serverUrl + remoteClientMode 两个实际配置。
     final currentUrl = widget.ws.serverUrl;
     String nextUrl = currentUrl;
 
     final shouldUseRemote =
-        _selectedMode != ConnectionMode.localOrUsb || !_supportsLocalHostLifecycle;
+        _selectedMode != ConnectionMode.localOrUsb ||
+        !_supportsLocalHostLifecycle;
 
     switch (_selectedMode) {
       case ConnectionMode.localOrUsb:
@@ -145,6 +148,7 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
   }
 
   Future<void> _save() async {
+    // LAN/公网模式要求提供非本机地址，避免误用 localhost 导致无法连通。
     String? customUrl;
 
     if (_selectedMode == ConnectionMode.lan) {
@@ -208,7 +212,8 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
           width: (MediaQuery.of(context).size.width * 0.9).clamp(280.0, 460.0),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height *
+              maxHeight:
+                  MediaQuery.of(context).size.height *
                   (bottomInset > 0 ? 0.48 : 0.62),
             ),
             child: SingleChildScrollView(
@@ -348,10 +353,7 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
             onPressed: () => Navigator.of(context).pop(false),
             child: const Text('取消'),
           ),
-        FilledButton(
-          onPressed: _save,
-          child: Text(widget.confirmText),
-        ),
+        FilledButton(onPressed: _save, child: Text(widget.confirmText)),
       ],
     );
   }

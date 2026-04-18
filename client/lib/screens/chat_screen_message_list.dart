@@ -53,6 +53,7 @@ class _MessageListState extends State<_MessageList> {
   bool _dragArmed = false;
   bool _isBoxSelecting = false;
 
+  // 判断鼠标是否落在气泡内容区：普通模式下优先给文本选择逻辑处理。
   bool _pointInAnyBubble(Offset globalPoint) {
     for (final rect in _messageBubbleRects.values) {
       if (rect.contains(globalPoint)) return true;
@@ -76,6 +77,7 @@ class _MessageListState extends State<_MessageList> {
   }
 
   void _finishBoxSelection() {
+    // 框选命中规则：以“整行矩形与选区重叠”为准。
     final localRect = _currentDragRectLocal();
     final globalRect = _localRectToGlobal(localRect);
     final selected = <String>{};
@@ -111,6 +113,7 @@ class _MessageListState extends State<_MessageList> {
   }
 
   Widget _buildListView() {
+    // 每次重建时同步清理失效矩形缓存，避免命中已删除消息。
     final aliveIds = widget.messages.map((m) => m.id).toSet();
     _messageRowRects.removeWhere((id, _) => !aliveIds.contains(id));
     _messageBubbleRects.removeWhere((id, _) => !aliveIds.contains(id));
@@ -185,6 +188,7 @@ class _MessageListState extends State<_MessageList> {
                   !kIsWeb && (Platform.isAndroid || Platform.isIOS);
               final targetMessageId = _activeTextActionMessageId;
 
+              // 桌面保留复制；移动端额外提供删除/多选快捷操作。
               return AdaptiveTextSelectionToolbar.buttonItems(
                 anchors: selectableRegionState.contextMenuAnchors,
                 buttonItems: [

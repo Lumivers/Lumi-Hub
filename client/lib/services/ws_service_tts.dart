@@ -1,6 +1,7 @@
 part of 'ws_service.dart';
 
 extension WsServiceTtsPart on WsService {
+  // 检查某一轮 turn 是否已有可播放音频（内存索引 + 磁盘恢复）。
 
   bool hasTtsAudio(String turnId) {
     final normalized = turnId.trim();
@@ -22,8 +23,10 @@ extension WsServiceTtsPart on WsService {
 
     return false;
   }
+
   bool isTtsGenerating(String turnId) => _ttsGeneratingTurns.contains(turnId);
 
+  // 优先使用 Windows 的 LOCALAPPDATA，避免 systemTemp 在重启后被清理。
   Directory _resolveTtsCacheDir() {
     if (!kIsWeb && Platform.isWindows) {
       final localAppData = Platform.environment['LOCALAPPDATA'];
@@ -39,6 +42,7 @@ extension WsServiceTtsPart on WsService {
     );
   }
 
+  // 兼容历史缓存目录：即使内存索引丢失，也尝试按 turnId 扫描恢复。
   String? _recoverTtsAudioPath(String turnId) {
     final dirs = <Directory>[_resolveTtsCacheDir()];
     final legacyTempDir = Directory(
@@ -82,6 +86,7 @@ extension WsServiceTtsPart on WsService {
   }
 
   void _handleTtsStreamStart(Map<String, dynamic> data) {
+    // 阶段 1：初始化当前 turn 的分片缓冲区。
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
     final turnId = (payload['turn_id'] as String? ?? '').trim();
     if (turnId.isEmpty) return;
@@ -97,6 +102,7 @@ extension WsServiceTtsPart on WsService {
   }
 
   void _handleTtsStreamChunk(Map<String, dynamic> data) {
+    // 阶段 2：持续接收分片并按 seq 存储。
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
     final turnId = (payload['turn_id'] as String? ?? '').trim();
     if (turnId.isEmpty) return;
@@ -119,6 +125,7 @@ extension WsServiceTtsPart on WsService {
   }
 
   Future<void> _handleTtsStreamEnd(Map<String, dynamic> data) async {
+    // 阶段 3：合并分片并落盘，写入可播放文件索引。
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
     final turnId = (payload['turn_id'] as String? ?? '').trim();
     if (turnId.isEmpty) return;
@@ -183,6 +190,7 @@ extension WsServiceTtsPart on WsService {
       throw Exception('语音文件尚未准备完成，请稍后重试');
     }
 
+    // 防抖锁：避免连续点击播放/停止导致播放器状态竞争。
     _ttsOperationLocked = true;
 
     try {
@@ -266,6 +274,7 @@ extension WsServiceTtsPart on WsService {
     if (_status != WsStatus.connected || !_isAuthenticated) return;
     if (normalizedText.isEmpty) return;
 
+    // 请求 Host 异步生成语音，客户端通过 TTS_STREAM_* 消息流接收结果。
     _send({
       'message_id': _genId(),
       'type': 'VOICE_TTS_REQUEST',
@@ -297,6 +306,4 @@ extension WsServiceTtsPart on WsService {
       },
     });
   }
-
 }
-

@@ -18,9 +18,11 @@ from ..voice_extensions import (
 
 class VoiceHandlersMixin:
     async def _dispatch_voice_tts_request(self, message: dict, ws_session_id: str) -> None:
+        # TTS 合成放到后台任务，避免阻塞主消息分发协程。
         self._spawn_voice_tts_task(message, ws_session_id)
 
     async def _handle_voice_config_get(self, message: dict, ws_session_id: str) -> None:
+        # 返回当前 provider 配置快照（含 key 是否配置但不返回明文）。
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         user_id = self.active_sessions.get(ws_session_id)
         if not user_id:
@@ -126,6 +128,7 @@ class VoiceHandlersMixin:
         api_key = str(config.get("api_key", "") or "").strip()
         clear_api_key = bool(config.get("clear_api_key", False))
 
+        # 支持部分更新：voice_id / api_key 可独立变更。
         if voice_id:
             provider.default_voice = voice_id
             self._voice_config_cache["dashscope_voice_id"] = voice_id
@@ -177,6 +180,7 @@ class VoiceHandlersMixin:
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         turn_id = str(payload.get("turn_id", "") or "").strip()
 
+        # 指定 turn_id 则定向中断，否则中断当前活跃轮次。
         if turn_id:
             await self.speech_sessions.cancel_turn(ws_session_id, turn_id)
         else:
@@ -207,6 +211,7 @@ class VoiceHandlersMixin:
         )
 
     async def _handle_voice_tts_request(self, message: dict, ws_session_id: str) -> None:
+        # 处理 VOICE_TTS_REQUEST 全流程：校验 -> 启动 -> 分片推流 -> 结束回包。
         payload = message.get("payload", {})
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         user_id = self.active_sessions.get(ws_session_id)
@@ -287,6 +292,7 @@ class VoiceHandlersMixin:
             )
             return
 
+        # 单会话单活跃轮次：新请求会替换并打断旧轮次。
         replaced_turn = await self.speech_sessions.activate_turn(ws_session_id, turn_id)
         if replaced_turn:
             await self.voice_registry.cancel_all(ws_session_id, replaced_turn)

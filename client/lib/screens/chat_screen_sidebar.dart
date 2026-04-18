@@ -19,6 +19,7 @@ class _SidebarState extends State<_Sidebar> {
   StreamSubscription? _personaSub;
   List<String> _personaOrder = [];
 
+  // 以 user_id 隔离侧栏排序配置，避免多账号互相覆盖。
   String _personaOrderStorageKey() {
     final uid = widget.ws.user?['id']?.toString() ?? 'guest';
     return 'persona_order_$uid';
@@ -42,6 +43,7 @@ class _SidebarState extends State<_Sidebar> {
 
     final byId = {for (final p in personas) (p['id'] as String? ?? ''): p};
 
+    // 先按本地顺序回放，再补齐新增人格。
     final ordered = <Map<String, dynamic>>[];
     final used = <String>{};
 
@@ -65,6 +67,7 @@ class _SidebarState extends State<_Sidebar> {
         .where((id) => id.isNotEmpty)
         .toList();
     if (newOrder.join('|') != _personaOrder.join('|')) {
+      // 列表结构变更后自动回写，保持下次启动顺序一致。
       _personaOrder = newOrder;
       unawaited(_savePersonaOrder());
     }
@@ -76,7 +79,7 @@ class _SidebarState extends State<_Sidebar> {
   void initState() {
     super.initState();
     unawaited(_loadPersonaOrder());
-    // 监听人格操作响应，刷新列表
+    // 监听人格操作响应，执行本地 UI 收口并按需刷新列表。
     _personaSub = widget.ws.personaResponses.listen((data) {
       final type = data['type'] as String? ?? '';
       final payload = data['payload'] as Map<String, dynamic>? ?? {};

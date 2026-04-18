@@ -19,6 +19,7 @@ class _ServerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 根据配置字段推断展示类型，兼容旧配置。
     final rawType = config['type'] as String? ?? '';
     final isHttp =
         rawType == 'http' ||
@@ -139,6 +140,7 @@ class _TypeOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 轻量可点击卡片，用于切换 stdio/http。
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
@@ -230,6 +232,7 @@ class _KvFieldState extends State<_KvField> {
 
   @override
   Widget build(BuildContext context) {
+    // 独立控制器避免父组件重建时光标跳动。
     final colors = widget.colors;
     final colorScheme = widget.colorScheme;
     return TextField(

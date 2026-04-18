@@ -49,6 +49,7 @@ def _inject_auto_breaks(text: str, comma_break_ms: int, sentence_break_ms: int) 
 
 
 def build_style_plan(raw: dict | None) -> SpeechStylePlan:
+    """将前端原始 style_plan 归一化为受控范围参数。"""
     raw = raw or {}
     return SpeechStylePlan(
         rate=_clamp_float(raw.get("rate", raw.get("speech_rate", 1.0)), 0.5, 2.0, 1.0),
@@ -67,6 +68,7 @@ def build_style_plan(raw: dict | None) -> SpeechStylePlan:
 
 
 def compile_ssml(text: str, style_plan: SpeechStylePlan | None = None, voice_id: str = "") -> str:
+    """将纯文本与风格参数编译成 DashScope 可消费的 SSML。"""
     style_plan = style_plan or SpeechStylePlan()
     attrs: list[str] = [
         f'rate="{style_plan.rate:g}"',
@@ -81,6 +83,7 @@ def compile_ssml(text: str, style_plan: SpeechStylePlan | None = None, voice_id:
     if style_plan.effect_value:
         attrs.append(f'effectValue="{escape(style_plan.effect_value, quote=True)}"')
 
+    # auto_break 开启时按标点插入 break 标签。
     if style_plan.auto_break:
         escaped_text = _inject_auto_breaks(text or "", style_plan.comma_break_ms, style_plan.sentence_break_ms)
     else:

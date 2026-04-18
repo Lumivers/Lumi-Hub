@@ -48,6 +48,7 @@ class _BubbleItemState extends State<_BubbleItem> {
   final GlobalKey _bubbleContentKey = GlobalKey();
 
   void _reportRects() {
+    // 回传当前行与气泡矩形，供父层做鼠标框选命中。
     final rowCtx = _rowKey.currentContext;
     final rowBox = rowCtx?.findRenderObject() as RenderBox?;
     if (rowBox != null && rowBox.hasSize) {
@@ -66,6 +67,7 @@ class _BubbleItemState extends State<_BubbleItem> {
   bool get _isAttachmentBubble => widget.msg.content.startsWith('[附件] ');
   bool get _isImageBubble => widget.msg.content.startsWith('[图片] ');
 
+  // 协议格式：[图片]/[附件] path|||name
   String? _getAttachmentPath() {
     if (_isImageBubble || _isAttachmentBubble) {
       final parts = widget.msg.content
@@ -220,6 +222,7 @@ class _BubbleItemState extends State<_BubbleItem> {
       final path = _getAttachmentPath();
       final fileName = _getAttachmentName();
       if (path != null) {
+        // 图片优先内嵌预览，失败时回退到文件卡片。
         return MouseRegion(
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
@@ -316,6 +319,7 @@ class _BubbleItemState extends State<_BubbleItem> {
   void _showDesktopMenu(BuildContext context, Offset position) async {
     if (widget.msg.isTyping) return;
 
+    // 桌面端右键菜单：复制 / 多选 / 删除。
     final value = await showGeneralDialog<String>(
       context: context,
       barrierDismissible: true,
@@ -650,6 +654,7 @@ class _SelectionMarqueePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 允许用户反向拖动，先归一化成标准矩形再绘制。
     final normalized = Rect.fromLTRB(
       rect.left < rect.right ? rect.left : rect.right,
       rect.top < rect.bottom ? rect.top : rect.bottom,

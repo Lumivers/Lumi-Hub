@@ -76,7 +76,8 @@ class _InputBarState extends State<_InputBar> {
                 onKeyEvent: _handleKey,
                 child: TextField(
                   controller: widget.controller,
-                  enabled: true, // Always keep input enabled
+                  // 始终允许输入：生成中也可提前打字，发送按钮由外层控制是否可点击。
+                  enabled: true,
                   maxLines: null,
                   keyboardType: TextInputType.multiline,
                   textInputAction: TextInputAction.newline,
@@ -125,6 +126,7 @@ class _InputBarState extends State<_InputBar> {
           ),
           SizedBox(width: isCompact ? 2 : 4),
           IconButton(
+            // 生成中禁用发送，避免同一轮响应尚未结束时重复提交。
             onPressed: widget.enabled && !widget.isGenerating
                 ? widget.onSend
                 : null,

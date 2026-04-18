@@ -28,6 +28,7 @@ class _McpSettingsScreenState extends State<McpSettingsScreen> {
     super.initState();
     final ws = context.read<WsService>();
     _sub = ws.mcpConfigResponses.listen(_handleResponse);
+    // 首次进入时拉取完整 MCP 配置。
     if (ws.status == WsStatus.connected) {
       ws.getMcpConfig();
     } else {
@@ -44,6 +45,7 @@ class _McpSettingsScreenState extends State<McpSettingsScreen> {
     final payload = response['payload'] ?? {};
     final status = payload['status'];
 
+    // 统一处理“查询配置”和“更新配置”两类回包。
     if (type == 'MCP_CONFIG_RESPONSE') {
       setState(() {
         _isLoading = false;
@@ -78,6 +80,7 @@ class _McpSettingsScreenState extends State<McpSettingsScreen> {
   }
 
   void _saveAll() {
+    // 约定：前端仅维护 mcpServers 节点，提交时整体覆盖该节点。
     setState(() => _isLoading = true);
     final fullConfig = {'mcpServers': _rawServers};
     context.read<WsService>().updateMcpConfig(fullConfig);
@@ -91,6 +94,7 @@ class _McpSettingsScreenState extends State<McpSettingsScreen> {
   }
 
   Future<void> _openEditor({String? existingName}) async {
+    // 编辑时回填现有配置；新增时使用空草稿。
     McpServerDraft initial;
     if (existingName != null && _rawServers.containsKey(existingName)) {
       initial = McpServerDraft.fromConfig(

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  // 颜色直接在 LumiColors factory 中内联定义
+  // 主题主色定义；组件细分颜色由 LumiColors 扩展承载。
   static const _darkAccent = Color(0xFF5BACF0);
   static const _darkText = Color(0xFFEEF2F6);
   static const _darkBg = Color(0xFF17212B);
@@ -11,6 +11,7 @@ class AppTheme {
   static const _lightBg = Color(0xFFF0F2F5);
 
   static ThemeData dark({String? fontFamily}) {
+    // 深色主题：应用级色板 + 自定义扩展色。
     return ThemeData(
       brightness: Brightness.dark,
       scaffoldBackgroundColor: _darkBg,
@@ -25,6 +26,7 @@ class AppTheme {
   }
 
   static ThemeData light({String? fontFamily}) {
+    // 浅色主题：应用级色板 + 自定义扩展色。
     return ThemeData(
       brightness: Brightness.light,
       scaffoldBackgroundColor: _lightBg,
@@ -114,6 +116,7 @@ class LumiColors extends ThemeExtension<LumiColors> {
 
   @override
   LumiColors lerp(LumiColors? other, double t) {
+    // 主题切换动画时用于平滑插值。
     if (other == null) return this;
     return LumiColors(
       sidebar: Color.lerp(sidebar, other.sidebar, t)!,

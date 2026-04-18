@@ -38,6 +38,7 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
     _voiceIdController.text = settings.ttsVoiceId;
     _voiceSub = ws.voiceEvents.listen(_handleVoiceEvent);
 
+    // 仅在已连接且已登录时拉取 Host 端语音配置。
     if (ws.status == WsStatus.connected && ws.isAuthenticated) {
       ws.getVoiceConfig();
     } else {
@@ -48,7 +49,8 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
   void _handleVoiceEvent(Map<String, dynamic> event) {
     if (!mounted) return;
     final type = event['type'] as String? ?? '';
-    if (type != 'VOICE_CONFIG_RESPONSE' && type != 'VOICE_CONFIG_SET_RESPONSE') {
+    if (type != 'VOICE_CONFIG_RESPONSE' &&
+        type != 'VOICE_CONFIG_SET_RESPONSE') {
       return;
     }
 
@@ -64,6 +66,7 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
       return;
     }
 
+    // 以 Host 回包为准回填 UI，保证前后端配置一致。
     final config = payload['config'] as Map<String, dynamic>? ?? {};
     final voiceId = (config['voice_id'] as String? ?? '').trim();
     final source = (config['api_key_source'] as String? ?? 'missing').trim();
@@ -111,6 +114,7 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
     final voiceId = _voiceIdController.text.trim();
     final apiKey = _apiKeyController.text.trim();
 
+    // 本地偏好先落盘，再请求 Host 更新运行时配置。
     settings.setTtsVoiceId(voiceId);
     setState(() => _saving = true);
     ws.setVoiceConfig(voiceId: voiceId, apiKey: apiKey);
@@ -124,7 +128,10 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
     }
 
     setState(() => _saving = true);
-    ws.setVoiceConfig(voiceId: _voiceIdController.text.trim(), clearApiKey: true);
+    ws.setVoiceConfig(
+      voiceId: _voiceIdController.text.trim(),
+      clearApiKey: true,
+    );
   }
 
   void _showSnack(String message, {bool isError = false}) {
@@ -158,6 +165,7 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
       borderSide: BorderSide(color: colors.accent, width: 1.4),
     );
 
+    // 单一滚动区域复用页面/弹窗两种承载方式。
     final body = ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -203,7 +211,8 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
                     TextField(
                       controller: _voiceIdController,
                       decoration: InputDecoration(
-                        hintText: '输入 voice_id，例如 cosyvoice-v3.5-plus-firefly-xxxx',
+                        hintText:
+                            '输入 voice_id，例如 cosyvoice-v3.5-plus-firefly-xxxx',
                         filled: true,
                         fillColor: colors.sidebar,
                         isDense: true,
@@ -215,7 +224,8 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
                         border: baseBorder,
                         focusedBorder: focusedBorder,
                       ),
-                      onChanged: (v) => context.read<AppSettings>().setTtsVoiceId(v),
+                      onChanged: (v) =>
+                          context.read<AppSettings>().setTtsVoiceId(v),
                     ),
                     const SizedBox(height: 6),
                     Text(
@@ -233,7 +243,11 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.key_outlined, color: colors.subtext, size: 20),
+                        Icon(
+                          Icons.key_outlined,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'DashScope API Key',

@@ -20,6 +20,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   if (!kIsWeb && Platform.isWindows) {
+    // 桌面端窗口初始化：按屏幕比例设置初始尺寸并启用拦截关闭。
     await windowManager.ensureInitialized();
 
     Display primaryDisplay = await screenRetriever.getPrimaryDisplay();
@@ -80,6 +81,7 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
   }
 
   Future<void> _updateTrayMenu() async {
+    // 托盘菜单只保留两个核心动作：显示窗口、完全退出。
     final Menu menu = Menu(
       items: [
         MenuItem(key: 'show_window', label: '显示窗口'),
@@ -149,9 +151,8 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(
-                    context,
-                  ).pop(WindowCloseAction.minimize),
+                  onPressed: () =>
+                      Navigator.of(context).pop(WindowCloseAction.minimize),
                   child: const Text('最小化到托盘'),
                 ),
                 FilledButton(
@@ -166,6 +167,7 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
       },
     );
 
+    // 兜底默认最小化，避免误退出导致后台任务被中断。
     final action = result ?? WindowCloseAction.minimize;
     if (rememberChoice) {
       settings.setWindowCloseAction(action);
@@ -241,6 +243,7 @@ class AuthWrapper extends StatelessWidget {
     final bootstrap = context.watch<BootstrapService>();
     final ws = context.watch<WsService>();
 
+    // 页面路由优先级：启动流程 -> 鉴权页 -> 聊天页。
     if (!bootstrap.isReady) {
       return const BootstrapScreen();
     }

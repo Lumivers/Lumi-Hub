@@ -42,6 +42,7 @@ class LumiWSServer:
             os.environ.get("LUMI_WS_CONNECT_RATE_MAX", "30")
         )
 
+        # 可选握手密钥：用于在 CONNECT 阶段进行轻量接入校验。
         if self._access_key:
             logger.info("[Lumi-Hub] WS 握手密钥已启用。")
         else:
@@ -194,9 +195,7 @@ class LumiWSServer:
         ws = self.clients.get(session_id)
         self._session_last_seen[session_id] = time.time()
 
-        # 检查是否是正在等待的响应 (通过让前端回传相同的 message_id 或在 payload 里包含 task_id)
-        # 根据 protocol.json, AUTH_RESPONSE 会包含相同的 message_id 或 payload.task_id
-        # 这里我们优先检查 message_id
+        # 优先命中 pending 响应通道（如 AUTH_RESPONSE），避免落入普通业务分发。
         key = (session_id, msg_id)
         if key in self._pending_responses:
             self._pending_responses[key].set_result(message)
@@ -207,7 +206,7 @@ class LumiWSServer:
             await ws.close(code=4003, reason="connect blocked")
             return
 
-        # 心跳处理
+        # 心跳处理：仅允许已完成 CONNECT 握手的会话。
         if msg_type == "PING":
             if session_id not in self._connected_sessions:
                 await self._send_error(session_id, "NOT_CONNECTED", "请先发送 CONNECT 完成握手")
@@ -222,7 +221,7 @@ class LumiWSServer:
             })
             return
 
-        # 连接握手
+        # 连接握手：限流 -> 可选密钥校验 -> 记录会话可用状态。
         if msg_type == "CONNECT":
             logger.info(f"[Lumi-Hub] Client 握手: {message.get('payload', {})}")
 
@@ -267,7 +266,7 @@ class LumiWSServer:
             await self._send_error(session_id, "NOT_CONNECTED", "请先发送 CONNECT 完成握手")
             return
 
-        # 其余消息交给外部注册的 handler 处理
+        # 其余消息交给外部注册的业务 handler 处理。
         if self._message_handler:
             await self._message_handler(message, session_id)
         else:
@@ -288,6 +287,7 @@ class LumiWSServer:
         })
 
     async def _cleanup_idle_sessions(self):
+        # 后台清理空闲会话，防止僵尸连接长期占用资源。
         while True:
             await asyncio.sleep(30)
             if self._idle_timeout_seconds <= 0:

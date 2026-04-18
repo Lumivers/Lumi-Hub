@@ -37,6 +37,7 @@ class McpHandlersMixin:
 
     async def _handle_mcp_config_update(self, message: dict, ws_session_id: str) -> None:
         """更新并热重载 MCP 配置"""
+        # 由 manager 负责“落盘 + 重连”，handler 只做协议编排。
         payload = message.get("payload", {})
         config = payload.get("config", {})
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])

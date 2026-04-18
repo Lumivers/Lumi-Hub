@@ -45,6 +45,7 @@ class AppSettings extends ChangeNotifier {
   String _ttsVoiceId = '';
 
   AppSettings() {
+    // 构造后异步加载本地持久化配置。
     _load();
   }
 
@@ -122,6 +123,7 @@ class AppSettings extends ChangeNotifier {
   }
 
   Future<void> _load() async {
+    // 统一从 SharedPreferences 回填，缺省值按平台场景给出。
     final prefs = await SharedPreferences.getInstance();
     _fontFamily = prefs.getString(_fontKeyStorage) ?? 'MiSans';
     _closeAstrBotOnExit = prefs.getBool(_closeAstrBotOnExitStorage) ?? false;
@@ -131,15 +133,16 @@ class AppSettings extends ChangeNotifier {
       'exit' => WindowCloseAction.exit,
       _ => WindowCloseAction.ask,
     };
-    final mobileDefault = !kIsWeb &&
+    final mobileDefault =
+        !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
     _remoteClientMode =
         prefs.getBool(_remoteClientModeStorage) ?? mobileDefault;
 
     final connectionModeRaw =
-      prefs.getString(_connectionModeStorage) ??
-      (mobileDefault ? 'lan' : 'local_or_usb');
+        prefs.getString(_connectionModeStorage) ??
+        (mobileDefault ? 'lan' : 'local_or_usb');
     _connectionMode = switch (connectionModeRaw) {
       'lan' => ConnectionMode.lan,
       'public_tunnel' => ConnectionMode.publicTunnel,
@@ -147,9 +150,8 @@ class AppSettings extends ChangeNotifier {
     };
 
     _askConnectionModeOnLaunch =
-      prefs.getBool(_askConnectionModeOnLaunchStorage) ?? true;
-    _enableAiVoiceOutput =
-      prefs.getBool(_enableAiVoiceOutputStorage) ?? false;
+        prefs.getBool(_askConnectionModeOnLaunchStorage) ?? true;
+    _enableAiVoiceOutput = prefs.getBool(_enableAiVoiceOutputStorage) ?? false;
     _ttsVoiceId = prefs.getString(_ttsVoiceIdStorage) ?? '';
     _isLoaded = true;
     if (!_loadedCompleter.isCompleted) {
@@ -159,6 +161,7 @@ class AppSettings extends ChangeNotifier {
   }
 
   Future<void> _save() async {
+    // 每次修改都持久化，保证重启后配置一致。
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_fontKeyStorage, _fontFamily);
     await prefs.setBool(_closeAstrBotOnExitStorage, _closeAstrBotOnExit);

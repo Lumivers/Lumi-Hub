@@ -8,6 +8,7 @@ from astrbot.api import logger
 
 class AuthHandlersMixin:
     async def _handle_auth_register(self, message: dict, ws_session_id: str) -> None:
+        # 注册成功后立即建立 active_sessions 绑定。
         payload = message.get("payload", {})
         username = payload.get("username", "")
         password = payload.get("password", "")
@@ -58,6 +59,7 @@ class AuthHandlersMixin:
             logger.info(f"[Lumi-Hub] 用户注册并登录成功: {username}")
 
     async def _handle_auth_login(self, message: dict, ws_session_id: str) -> None:
+        # 登录成功会刷新 token（在 DB 层处理），并同步到当前 WS 会话。
         payload = message.get("payload", {})
         username = payload.get("username", "")
         password = payload.get("password", "")
@@ -108,6 +110,7 @@ class AuthHandlersMixin:
             logger.info(f"[Lumi-Hub] 用户登录成功: {username}")
 
     async def _handle_auth_restore(self, message: dict, ws_session_id: str) -> None:
+        # token 恢复仅接受客户端显式提供的 token。
         payload = message.get("payload", {})
         token = payload.get("token", "")
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])

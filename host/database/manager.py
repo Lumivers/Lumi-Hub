@@ -21,6 +21,7 @@ class DatabaseManager:
     # ===== 用户相关 =====
 
     def verify_password(self, plain_password, hashed_password):
+        # 当前使用 sha256 单向散列校验。
         return self.get_password_hash(plain_password) == hashed_password
 
     def get_password_hash(self, password):
@@ -56,7 +57,7 @@ class DatabaseManager:
             if not user or not self.verify_password(password, user.password_hash):
                 return {"error": "Invalid username or password"}
             
-            # 每次登录刷新 token，使旧 token 立即失效
+            # 每次登录刷新 token，使旧 token 立即失效。
             user.token = secrets.token_hex(32)
             session.commit()
             session.refresh(user)
@@ -99,6 +100,7 @@ class DatabaseManager:
         """保存单条消息记录"""
         with self.SessionLocal() as session:
             if client_msg_id:
+                # 幂等写入：相同 client_msg_id 走更新路径。
                 existing = session.query(Message).filter(Message.client_msg_id == client_msg_id).first()
                 if existing:
                     existing.user_id = user_id
@@ -157,6 +159,7 @@ class DatabaseManager:
         if not normalized_ids:
             return 0
 
+        # 兼容前端以 *_ai 形式传 assistant 消息 id。
         ai_base_ids = [mid[:-3] for mid in normalized_ids if mid.endswith("_ai") and len(mid) > 3]
 
         numeric_ids: list[int] = []
@@ -197,8 +200,7 @@ class DatabaseManager:
                               .order_by(Message.timestamp.desc())\
                               .offset(offset).limit(limit).all()
             
-            # 为了给前端展示，通常需要按时间正序（旧的在上面，新的在下面）
-            # 所以我们倒序获取后，再反转列表
+            # 前端展示要求按时间正序，所以这里执行 reverse。
             messages.reverse()
             
             result = []

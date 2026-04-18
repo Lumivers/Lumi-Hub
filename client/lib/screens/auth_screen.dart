@@ -15,6 +15,7 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
+  // 防止在短时间内重复触发 connect()。
   bool _reconnectQueued = false;
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
@@ -52,6 +53,7 @@ class _AuthScreenState extends State<AuthScreen> {
   void _ensureWsConnected() {
     final ws = context.read<WsService>();
     if (ws.status == WsStatus.disconnected && !_reconnectQueued) {
+      // 连接进行中时设置队列锁，结束后再释放。
       _reconnectQueued = true;
       unawaited(
         ws.connect().whenComplete(() {
@@ -71,6 +73,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   void _submit() {
+    // 登录与注册复用同一表单，仅根据模式切换请求类型。
     final username = _usernameCtrl.text.trim();
     final password = _passwordCtrl.text.trim();
     if (username.isEmpty || password.isEmpty) {
@@ -92,6 +95,7 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget build(BuildContext context) {
     final wsService = context.watch<WsService>();
 
+    // UI 重建时兜底触发自动重连，避免偶发断线后停在登录页。
     if (wsService.status == WsStatus.disconnected && !_reconnectQueued) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;

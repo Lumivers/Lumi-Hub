@@ -4,6 +4,8 @@ import time
 
 from astrbot.api import logger
 
+# 该模块提供“本地文件工具”能力，供 AI 在受控范围内读写工程文件。
+
 def read_file(path: str, start_line: int = 1, end_line: int = None) -> str:
     """读取本地文件内容，支持指定行范围。"""
     try:
@@ -43,7 +45,7 @@ def backup_file(path: str) -> bool:
         if not os.path.exists(path):
             return False
         
-        # 获取绝对路径以避免 CWD 变化导致的路径问题
+        # 获取绝对路径以避免 CWD 变化导致的路径问题。
         abs_path = os.path.abspath(path)
         base_dir = os.path.dirname(abs_path)
         cache_dir = os.path.join(base_dir, ".Lumi_cache")

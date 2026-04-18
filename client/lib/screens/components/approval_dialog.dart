@@ -13,6 +13,7 @@ class ApprovalDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 审批弹窗只负责展示请求上下文并回传 APPROVED/REJECTED。
     final payload = authRequest['payload'] as Map<String, dynamic>? ?? {};
     final actionType = payload['action_type'] as String? ?? 'UNKNOWN';
     final targetPath = payload['target_path'] as String? ?? 'N/A';
@@ -82,6 +83,7 @@ class ApprovalDialog extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(description, style: const TextStyle(fontSize: 15)),
                 if (diffPreview.isNotEmpty) ...[
+                  // 仅展示预览文本，不做语义解释，避免误导审批决策。
                   const SizedBox(height: 16),
                   const Text(
                     '变更预览:',

@@ -12,7 +12,7 @@ class LumiMCPManager:
     def __init__(self, data_dir: str):
         self.config_path = os.path.join(data_dir, "mcp_config.json")
         self.servers: Dict[str, dict] = {}
-        # Stores active ClientSession objects keyed by server name
+        # 活跃会话：server_name -> ClientSession
         self.sessions: Dict[str, ClientSession] = {}
         self._server_tasks: Dict[str, asyncio.Task] = {}
         self._shutdown_events: Dict[str, asyncio.Event] = {}
@@ -53,7 +53,7 @@ class LumiMCPManager:
         except Exception as e:
             logger.error(f"[Lumi MCP] 保存配置文件失败: {e}")
 
-        # 3. Shutdown existing servers
+        # 3. 先关旧连接，避免新旧会话并存造成工具路由混乱。
         await self.shutdown()
 
         # 4. Re-initialize
@@ -68,7 +68,7 @@ class LumiMCPManager:
         explicit = config.get("type", "")
         if explicit in ("http", "sse"):
             return "http"
-        # Auto-detect: if 'url' key exists but no 'command', treat as http
+        # 自动识别：只有 url 且没有 command 时，按 HTTP/SSE 处理。
         if "url" in config and "command" not in config:
             return "http"
         return "stdio"
@@ -81,7 +81,7 @@ class LumiMCPManager:
             task = asyncio.create_task(self._server_loop_stdio(name, config))
         self._server_tasks[name] = task
 
-        # Wait for session to be established (10s timeout)
+        # 等待会话建立（最多 10 秒），失败时仅记录错误不抛出中断全局启动。
         for _ in range(100):
             if name in self.sessions:
                 break
@@ -96,7 +96,7 @@ class LumiMCPManager:
         args = config.get("args", [])
         env = config.get("env", {})
 
-        # Merge parent environment
+        # 合并父进程环境变量，确保 PATH 等运行时依赖可用。
         server_env = os.environ.copy()
         for k, v in env.items():
             server_env[k] = v
@@ -133,7 +133,7 @@ class LumiMCPManager:
         self._shutdown_events[name] = shutdown_event
 
         try:
-            # Lazy import so stdio-only setups don't break if sse extras are missing
+            # 延迟导入：纯 stdio 部署无需安装 sse 额外依赖。
             from mcp.client.sse import sse_client
 
             async with sse_client(url=url, headers=headers) as (read_stream, write_stream):
@@ -159,11 +159,11 @@ class LumiMCPManager:
     async def shutdown(self):
         """Close all connections and terminate MCP servers."""
         logger.info("[Lumi MCP] 正在关闭全部服务器...")
-        # 1. Send shutdown signals
+        # 1. 广播 shutdown 信号
         for name, event in list(self._shutdown_events.items()):
             event.set()
 
-        # 2. Wait for background tasks to finish gracefully
+        # 2. 等待后台任务优雅退出，超时后强制 cancel。
         for name, task in list(self._server_tasks.items()):
             if not task.done():
                 try:

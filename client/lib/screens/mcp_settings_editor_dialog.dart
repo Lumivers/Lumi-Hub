@@ -31,6 +31,7 @@ class _McpServerEditorDialogState extends State<_McpServerEditorDialog> {
   @override
   void initState() {
     super.initState();
+    // 一次性把 draft 拆成控制器与可编辑列表，避免直接改原对象。
     final d = widget.draft;
     _nameCtrl = TextEditingController(text: d.name);
     _type = d.type;
@@ -72,6 +73,7 @@ class _McpServerEditorDialogState extends State<_McpServerEditorDialog> {
 
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
+    // 提交时重新组装 draft，交由上层统一保存。
     final result = McpServerDraft(
       name: _nameCtrl.text.trim(),
       type: _type,
@@ -245,6 +247,7 @@ class _McpServerEditorDialogState extends State<_McpServerEditorDialog> {
   }
 
   Widget _buildTypeSelector(LumiColors colors, ColorScheme colorScheme) {
+    // 类型切换只影响当前表单可见字段，不立即提交。
     return Row(
       children: [
         _TypeOption(
@@ -336,6 +339,7 @@ class _McpServerEditorDialogState extends State<_McpServerEditorDialog> {
     required String valueHint,
     bool obscureValue = false,
   }) {
+    // env/headers 使用同一套 KV 编辑 UI。
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

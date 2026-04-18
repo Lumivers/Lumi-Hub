@@ -35,6 +35,7 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
     ConnectionMode mode,
     String? customUrl,
   ) async {
+    // 启动前统一归一化连接模式，决定默认地址与是否远程客户端模式。
     final currentUrl = ws.serverUrl;
 
     String nextUrl = currentUrl;
@@ -102,9 +103,9 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
     }
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('连接设置已保存，下次连接将使用新地址。')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('连接设置已保存，下次连接将使用新地址。')));
   }
 
   Future<void> _prepareAndStart() async {
@@ -116,6 +117,7 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
     await settings.loaded;
     if (!mounted) return;
 
+    // 首次阶段：先确定连接模式，再进入 BootstrapService 启动流程。
     if (settings.askConnectionModeOnLaunch) {
       await _showConnectionModeDialog(context);
     } else {
@@ -249,13 +251,13 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                         style: const TextStyle(fontSize: 12),
                       ),
                     ),
-                    if (bootstrap.hasFailed) const Spacer(),
-                    OutlinedButton.icon(
-                      onPressed: _openConnectionSettings,
-                      icon: const Icon(Icons.tune, size: 16),
-                      label: const Text('连接设置'),
-                    ),
-                    if (bootstrap.hasFailed) const SizedBox(width: 8),
+                  if (bootstrap.hasFailed) const Spacer(),
+                  OutlinedButton.icon(
+                    onPressed: _openConnectionSettings,
+                    icon: const Icon(Icons.tune, size: 16),
+                    label: const Text('连接设置'),
+                  ),
+                  if (bootstrap.hasFailed) const SizedBox(width: 8),
                   if (bootstrap.hasFailed)
                     FilledButton.icon(
                       onPressed: bootstrap.retry,

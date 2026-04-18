@@ -17,12 +17,7 @@ enum BootstrapStage {
   failed,
 }
 
-enum LogLevel {
-  info,
-  debug,
-  warning,
-  error,
-}
+enum LogLevel { info, debug, warning, error }
 
 class LogEntry {
   final DateTime time;
@@ -40,10 +35,14 @@ class LogEntry {
 
   String get levelString {
     switch (level) {
-      case LogLevel.info: return 'INFO';
-      case LogLevel.debug: return 'DEBUG';
-      case LogLevel.warning: return 'WARN';
-      case LogLevel.error: return 'ERROR';
+      case LogLevel.info:
+        return 'INFO';
+      case LogLevel.debug:
+        return 'DEBUG';
+      case LogLevel.warning:
+        return 'WARN';
+      case LogLevel.error:
+        return 'ERROR';
     }
   }
 
@@ -74,7 +73,8 @@ class BootstrapService extends ChangeNotifier {
 
   bool get isReady => _stage == BootstrapStage.ready;
   bool get hasFailed => _stage == BootstrapStage.failed;
-  bool get isRemoteClientMode => _settings.remoteClientMode || !_supportsLocalHostLifecycle;
+  bool get isRemoteClientMode =>
+      _settings.remoteClientMode || !_supportsLocalHostLifecycle;
 
   bool get _supportsLocalHostLifecycle => !kIsWeb && Platform.isWindows;
   bool get _isLocalHostTarget {
@@ -107,11 +107,13 @@ class BootstrapService extends ChangeNotifier {
   }
 
   Future<void> start() async {
+    // 启动状态机入口：按“模式判定 -> 环境/进程 -> 连接”顺序推进。
     await _ensureLogFileReady();
     _setStage(BootstrapStage.checkingEnv);
     _log('正在初始化内核...');
 
     if (isRemoteClientMode) {
+      // 远程模式：不触碰本机 AstrBot 生命周期，仅检查 WS 连接。
       _log('远程连接模式：跳过本机 Python 检测与 AstrBot 拉起。');
       _setStage(BootstrapStage.connectingWs);
       _log('正在连接远程 Host: ${_ws.serverUrl}');
@@ -133,6 +135,7 @@ class BootstrapService extends ChangeNotifier {
       return;
     }
 
+    // 本机模式：先验证 python，再检测/拉起 AstrBot，再连 WS。
     final pythonOk = await _checkPythonAvailable();
     if (!pythonOk) {
       _fail('未检测到 Python，请确认 python 已加入 PATH。');
@@ -214,6 +217,7 @@ class BootstrapService extends ChangeNotifier {
     }
 
     try {
+      // detached 模式启动，避免阻塞前端进程。
       final process = await Process.start(
         'python',
         ['main.py'],
@@ -262,7 +266,10 @@ class BootstrapService extends ChangeNotifier {
       if (result.exitCode == 0) {
         _log('已关闭 AstrBot（PID: $pid）。');
       } else {
-        _log('关闭 AstrBot 失败: ${result.stderr.toString().trim()}', level: LogLevel.error);
+        _log(
+          '关闭 AstrBot 失败: ${result.stderr.toString().trim()}',
+          level: LogLevel.error,
+        );
       }
     } catch (e) {
       _log('关闭 AstrBot 异常: $e', level: LogLevel.error);
@@ -288,6 +295,7 @@ class BootstrapService extends ChangeNotifier {
   }
 
   Future<bool> _waitHostReady(Duration timeout) async {
+    // 轮询端口可用性，超时则交由上层给出失败状态。
     final stopwatch = Stopwatch()..start();
     while (stopwatch.elapsed < timeout) {
       if (await _isHostReachable()) {
@@ -329,7 +337,8 @@ class BootstrapService extends ChangeNotifier {
   void _log(String message, {LogLevel level = LogLevel.info}) {
     final entry = LogEntry(DateTime.now(), level, message);
     _logs.add(entry);
-    if (_logs.length > 30) { // Keep a bit more logs for better debugging
+    if (_logs.length > 30) {
+      // Keep a bit more logs for better debugging
       _logs.removeAt(0);
     }
     unawaited(_appendLogLine(entry.toString()));

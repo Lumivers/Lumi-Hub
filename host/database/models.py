@@ -15,7 +15,7 @@ class User(Base):
     token = Column(String(64), nullable=True, unique=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # 关联用户的聊天记录
+    # 关联用户的聊天记录与附件。
     messages = relationship("Message", back_populates="user", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="user", cascade="all, delete-orphan")
 
@@ -38,7 +38,7 @@ class Message(Base):
     # 人格隔离字段：记录这条消息是给哪个人格发的，或者是哪个人格回的
     persona_id = Column(String(50), nullable=False, default="default", server_default="default", index=True)
     
-    # 防止多端同步时出现重复 id（如果有前端生成的 UUID 的话可以存这里，目前先作为可选）
+    # 防止多端同步时出现重复 id（前端 message_id 可落这里）。
     client_msg_id = Column(String(64), nullable=True, unique=True)
 
     user = relationship("User", back_populates="messages")
@@ -67,6 +67,7 @@ class Attachment(Base):
 
 # 数据库引擎初始化辅助函数
 def init_db(db_path: str):
+    # 首次启动会自动建表。
     engine = create_engine(f"sqlite:///{db_path}", echo=False)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)

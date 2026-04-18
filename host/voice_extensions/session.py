@@ -5,11 +5,13 @@ import asyncio
 
 class SpeechSessionController:
     def __init__(self) -> None:
+        # 单会话单活跃轮次：ws_session_id -> turn_id
         self._active_turn: dict[str, str] = {}
         self._cancelled_turns: set[tuple[str, str]] = set()
         self._lock = asyncio.Lock()
 
     async def activate_turn(self, ws_session_id: str, turn_id: str) -> str | None:
+        # 激活新轮次，若有旧轮次则标记取消并返回旧 turn_id。
         async with self._lock:
             previous_turn = self._active_turn.get(ws_session_id)
             self._active_turn[ws_session_id] = turn_id
@@ -48,6 +50,7 @@ class SpeechSessionController:
             self._cancelled_turns.discard((ws_session_id, turn_id))
 
     async def clear_session(self, ws_session_id: str) -> str | None:
+        # 会话断开时清理活跃轮次与取消标记。
         async with self._lock:
             active_turn = self._active_turn.pop(ws_session_id, None)
             self._cancelled_turns = {

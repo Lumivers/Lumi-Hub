@@ -15,11 +15,12 @@ def _clamp(value: float, min_value: float, max_value: float) -> float:
 
 
 def plan_style_for_text(text: str) -> SpeechStylePlan:
+    """根据文本内容生成稳定且可复现的风格参数。"""
     normalized = (text or "").strip()
     if not normalized:
         return SpeechStylePlan()
 
-    # Keep variation deterministic so repeated playback remains stable for the same text.
+    # 保持确定性抖动：同一文本重复生成时风格一致。
     rate_jitter = (_hash_ratio(normalized, "rate") - 0.5) * 0.08
     pitch_jitter = (_hash_ratio(normalized, "pitch") - 0.5) * 0.10
     volume_jitter = int((_hash_ratio(normalized, "volume") - 0.5) * 6)

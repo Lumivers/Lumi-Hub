@@ -13,6 +13,12 @@ from ..lumi_event import LumiMessageEvent
 
 
 class ChatHandlersMixin:
+    """聊天消息处理能力。
+
+    该 mixin 负责把前端 CHAT_REQUEST 转成 AstrBot 事件并投递，
+    同时处理附件注入、消息持久化、以及结束解锁信号发送。
+    """
+
     async def _handle_chat_request(self, message: dict, ws_session_id: str) -> None:
         """
         处理 CHAT_REQUEST：
@@ -21,6 +27,7 @@ class ChatHandlersMixin:
         3. commit_event() 注入 AstrBot 事件队列
         4. AstrBot 自动调 LLM -> 调用 event.send() -> WebSocket 回传
         """
+        # 阶段 0：提取请求参数与上下文
         payload = message.get("payload", {})
         user_content = payload.get("content", "")
         original_user_content = str(user_content or "").strip()
@@ -29,6 +36,7 @@ class ChatHandlersMixin:
         context_id = payload.get("context_id", ws_session_id)
         persona_id = payload.get("persona_id", "default")
 
+        # 阶段 1：解析附件，构造补充提示与多媒体组件
         attachment_lines: list[str] = []
         attachment_hints: list[str] = []
         image_components: list[Image] = []
@@ -92,7 +100,7 @@ class ChatHandlersMixin:
 
         logger.info(f"[Lumi-Hub] 收到消息 (session={ws_session_id}, persona={persona_id}): {user_content}")
 
-        # 鉴权校验
+        # 阶段 2：鉴权校验，拒绝未登录会话
         user_id = self.active_sessions.get(ws_session_id)
         if not user_id:
             logger.warning("[Lumi-Hub] 未登录用户尝试发送消息，已拒绝")
@@ -109,7 +117,7 @@ class ChatHandlersMixin:
             )
             return
 
-        # 把附件作为独立消息存入数据库，与前端拆分展示逻辑对齐
+        # 阶段 3：持久化用户输入（附件与文本分开落库，便于前端分块展示）
         if isinstance(attachments, list) and attachments:
             for att in attachments:
                 att = att or {}
@@ -139,7 +147,7 @@ class ChatHandlersMixin:
                 persona_id=persona_id,
             )
 
-        # 确保 AstrBot 当前的默认人格是用户正在对话的人格
+        # 阶段 4：同步人格上下文，避免后续处理跑到错误人格
         pm = self._shared_state.get("persona_manager")
         if pm:
             try:
@@ -147,7 +155,7 @@ class ChatHandlersMixin:
             except Exception as e:
                 logger.error(f"[Lumi-Hub] 同步人格状态失败: {e}")
 
-        # 1. 构造 AstrBotMessage（和 WebChatAdapter 做法一致）
+        # 阶段 5：构造 AstrBotMessage（与 WebChatAdapter 兼容）
         abm = AstrBotMessage()
         abm.self_id = "lumi_hub"
         # 使用绑定的真实账号 user_id 而不是动态 session_id 作为识别，让大模型持久记忆用户
@@ -167,7 +175,7 @@ class ChatHandlersMixin:
         abm.raw_message = message
         abm.timestamp = int(time.time())
 
-        # 2. 包装为 LumiMessageEvent
+        # 阶段 6：包装为 LumiMessageEvent，携带回传所需上下文
         event = LumiMessageEvent(
             message_str=user_content,
             message_obj=abm,
@@ -180,11 +188,11 @@ class ChatHandlersMixin:
             persona_id=persona_id,
         )
 
-        # 3. 注入 AstrBot 事件队列（EventBus 会自动 handle、调 LLM、调 event.send()）
+        # 阶段 7：注入 AstrBot 事件队列，后续由 EventBus/Pipeline 自动处理
         self.commit_event(event)
         logger.info(f"[Lumi-Hub] 事件已提交到 AstrBot 队列 (msg_id={msg_id})")
 
-        # 4. 后台轮询跟踪该事件的生命周期，待其跑完整个 Pipeline 后发送 CHAT_RESPONSE_END 给客户端解锁UI
+        # 阶段 8：后台跟踪事件生命周期，结束后发送 CHAT_RESPONSE_END 解锁前端 UI
         async def wait_for_event_completion() -> None:
             # 阶段 A: 等待 EventBus 从 _event_queue 中读取并转移到 active_event_registry
             while True:

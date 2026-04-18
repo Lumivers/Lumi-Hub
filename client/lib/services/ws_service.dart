@@ -16,6 +16,10 @@ part 'ws_service_upload.dart';
 
 enum WsStatus { disconnected, connecting, connected }
 
+/// 单轮 TTS 的分片缓存。
+///
+/// Host 可能按 seq 分块回传音频，这里先按序号暂存，
+/// 在 TTS_STREAM_END 时统一合并落盘。
 class _TtsTurnBuffer {
   _TtsTurnBuffer({required this.format});
 
@@ -33,6 +37,12 @@ class _TtsTurnBuffer {
 }
 
 class WsService extends ChangeNotifier {
+  /// WebSocket + 协议状态入口。
+  ///
+  /// 职责：
+  /// 1. 管理连接/重连/心跳
+  /// 2. 处理鉴权、聊天、历史、人格、MCP、上传、语音协议消息
+  /// 3. 维护前端页面直接消费的状态（messages、isGenerating、personas 等）
   static const String _defaultUrl = 'ws://127.0.0.1:8765';
   static const String _serverUrlStorage = 'ws.server_url';
   static const String _accessKeyStorage = 'ws.access_key';
@@ -107,6 +117,7 @@ class WsService extends ChangeNotifier {
   bool get isTtsPlaying => _isTtsPlaying;
   String? get playingTtsTurnId => _playingTtsTurnId;
 
+  // 供 part 文件使用，避免在 extension 里直接调用受保护成员 notifyListeners。
   void _notifyStateChanged() {
     notifyListeners();
   }
@@ -117,8 +128,10 @@ class WsService extends ChangeNotifier {
   String _activePersonaId = '';
   String get activePersonaId => _activePersonaId;
 
+  // 约定 AI 回复 id 与请求 message_id 的映射规则。
   String _assistantMsgId(String msgId) => '${msgId}_ai';
 
+  // 合并流式回复时，尽量做重叠去重，避免重复片段导致“叠字”。
   String _mergeAssistantContent(String existing, String incoming) {
     if (incoming.isEmpty) return existing;
     if (existing.isEmpty) return incoming;
@@ -362,6 +375,7 @@ class WsService extends ChangeNotifier {
       final data = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = data['type'] as String? ?? '';
 
+      // 协议分发中心：所有 Host 回包都从这里进入，再路由到具体处理函数。
       switch (type) {
         case 'CHAT_RESPONSE':
           _handleChatResponse(data);
@@ -586,6 +600,7 @@ class WsService extends ChangeNotifier {
       );
     }
 
+    // offset=0 代表首屏加载；否则是向上翻页加载更早记录。
     if (offset == 0) {
       _messages
         ..clear()
@@ -689,6 +704,7 @@ class WsService extends ChangeNotifier {
     }
     final msgId = _genId();
     _historyLoading = true;
+    // 用 message_id 绑定 offset/completer，保证并发请求时结果可正确归位。
     _historyRequestOffsets[msgId] = offset;
     final completer = Completer<void>();
     _historyRequestCompleters[msgId] = completer;
@@ -845,7 +861,7 @@ class WsService extends ChangeNotifier {
   }
 
   void _handleDisconnect() {
-    // 清除 typing 占位
+    // 断线收口：先清 UI 占位，再释放 pending/completer，最后触发重连。
     _messages.removeWhere((m) => m.isTyping);
     _streamingMsgIds.clear();
     _pendingResponses.forEach((_, completer) {
@@ -873,6 +889,7 @@ class WsService extends ChangeNotifier {
   }
 
   void _sendHandshake() {
+    // 连接建立后先发 CONNECT，向 Host 声明客户端能力与访问密钥。
     _send({
       'message_id': _genId(),
       'type': 'CONNECT',
@@ -889,6 +906,7 @@ class WsService extends ChangeNotifier {
   }
 
   void _startPing() {
+    // 心跳仅用于保活与探活，PONG 不参与业务状态更新。
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(_pingInterval, (_) {
       _send({
@@ -922,6 +940,7 @@ class WsService extends ChangeNotifier {
   }
 
   String _genId() =>
+      // 轻量本地 id：用于请求-响应关联，不用于安全场景。
       Random().nextInt(0xFFFFFF).toRadixString(16).padLeft(6, '0');
 
   @override

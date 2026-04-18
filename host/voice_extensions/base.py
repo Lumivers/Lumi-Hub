@@ -7,6 +7,10 @@ from typing import AsyncGenerator
 
 @dataclass(slots=True)
 class SpeechStylePlan:
+    """语音风格规划参数。
+
+    该对象由 planner/ssml 共同消费，用于控制语速、音调、停顿与读法。
+    """
     rate: float = 1.0
     pitch: float = 1.0
     volume: int = 50
@@ -23,6 +27,7 @@ class SpeechStylePlan:
 
 @dataclass(slots=True)
 class TTSRequest:
+    """一次 TTS 请求的标准输入模型。"""
     ws_session_id: str
     turn_id: str
     request_id: str
@@ -36,6 +41,7 @@ class TTSRequest:
 
 @dataclass(slots=True)
 class AudioChunk:
+    """流式音频分片。"""
     seq: int
     data: bytes
 
@@ -45,6 +51,7 @@ class VoiceProviderError(RuntimeError):
 
 
 class VoiceTTSProvider(abc.ABC):
+    """TTS Provider 抽象基类。"""
     provider_name: str = "unknown"
     output_format: str = "mp3"
     sample_rate: int = 24000

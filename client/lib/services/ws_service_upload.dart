@@ -1,6 +1,7 @@
 part of 'ws_service.dart';
 
 extension WsServiceUploadPart on WsService {
+  // 从 FILE_UPLOAD_ERROR 中提取可展示的错误信息。
 
   String? _readUploadErrorDetail(Map<String, dynamic> response) {
     final payload = response['payload'];
@@ -20,6 +21,7 @@ extension WsServiceUploadPart on WsService {
     Map<String, dynamic> payload, {
     Duration timeout = const Duration(seconds: 30),
   }) async {
+    // 上传流程依赖 request-response 对齐，未连接时直接失败。
     if (_status != WsStatus.connected) {
       throw Exception('WebSocket 未连接');
     }
@@ -40,11 +42,13 @@ extension WsServiceUploadPart on WsService {
     try {
       return await completer.future.timeout(timeout);
     } on TimeoutException {
+      // 超时后及时清理 pending，避免 map 持续增长。
       _pendingResponses.remove(msgId);
       throw Exception('$type 请求超时');
     }
   }
 
+  // 轻量后缀推断 MIME，最终仍以 Host 侧校验为准。
   String _mimeFromFileName(String fileName) {
     final lower = fileName.toLowerCase();
     if (lower.endsWith('.png')) return 'image/png';
@@ -62,6 +66,7 @@ extension WsServiceUploadPart on WsService {
     String filePath, {
     void Function(double progress)? onProgress,
   }) async {
+    // 阶段 1：本地读取文件并计算摘要。
     final file = File(filePath);
     if (!await file.exists()) {
       throw Exception('文件不存在: $filePath');
@@ -76,6 +81,7 @@ extension WsServiceUploadPart on WsService {
     final sha256Hex = sha256.convert(bytes).toString();
 
     Future<Map<String, dynamic>> sendInit() {
+      // 阶段 2：申请上传会话（拿到 upload_id）。
       return _sendAndAwaitResponse('FILE_UPLOAD_INIT', {
         'file_name': fileName,
         'mime_type': mimeType,
@@ -90,6 +96,7 @@ extension WsServiceUploadPart on WsService {
     } catch (e) {
       final err = e.toString();
       if (err.contains('FILE_UPLOAD_INIT 请求超时')) {
+        // 对初始化超时做一次重试，兼容 Host 重启中的短暂窗口。
         debugPrint('[WS] FILE_UPLOAD_INIT 超时，正在重试一次...');
         try {
           initResp = await sendInit();
@@ -116,6 +123,7 @@ extension WsServiceUploadPart on WsService {
 
     final totalChunks = (sizeBytes / WsService._uploadChunkSize).ceil();
     onProgress?.call(0);
+    // 阶段 3：按固定分片顺序上传。
     for (var index = 0; index < totalChunks; index++) {
       final start = index * WsService._uploadChunkSize;
       final end = min(sizeBytes, start + WsService._uploadChunkSize);
@@ -150,10 +158,9 @@ extension WsServiceUploadPart on WsService {
     if (attachment == null) {
       throw Exception('服务器未返回附件信息');
     }
-    // 前端渲染图片与本地点击打开都依赖原始本地路径。
+    // 阶段 4：上传完成，补充 local_path 供本地预览/打开使用。
     attachment['local_path'] = file.path;
     onProgress?.call(1);
     return attachment;
   }
-
 }
