@@ -8,11 +8,8 @@ import time
 import uuid
 import json
 import os
-import base64
-import hashlib
-import mimetypes
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, Callable
 
 from astrbot.core import db_helper
 
@@ -33,15 +30,16 @@ from .ws_server import LumiWSServer
 from .lumi_event import LumiMessageEvent
 from .database.manager import DatabaseManager
 from .mcp_manager import LumiMCPManager
+from .handlers import (
+    AuthHandlersMixin,
+    McpHandlersMixin,
+    UploadHandlersMixin,
+    VoiceHandlersMixin,
+)
 from .voice_extensions import (
     DashScopeTTSProvider,
     SpeechSessionController,
-    TTSRequest,
     VoiceExtensionRegistry,
-    VoiceProviderError,
-    build_style_plan,
-    compile_ssml,
-    plan_style_for_text,
 )
 
 from astrbot.api import logger
@@ -309,7 +307,13 @@ class LumiHub(Star):
     },
     support_streaming_message=True,
 )
-class LumiHubAdapter(Platform):
+class LumiHubAdapter(
+    VoiceHandlersMixin,
+    UploadHandlersMixin,
+    AuthHandlersMixin,
+    McpHandlersMixin,
+    Platform,
+):
     """Lumi-Hub 平台适配器。
 
     功能：
@@ -367,7 +371,32 @@ class LumiHubAdapter(Platform):
         self.voice_registry = VoiceExtensionRegistry()
         self.speech_sessions = SpeechSessionController()
         self._voice_turn_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._shared_state = _lumi_shared_state
         self._setup_voice_extensions()
+        self._message_handlers: dict[
+            str, Callable[[dict, str], Coroutine[Any, Any, None]]
+        ] = {
+            "CHAT_REQUEST": self._handle_chat_request,
+            "PERSONA_SWITCH": self._handle_persona_switch,
+            "PERSONA_LIST": self._handle_persona_list,
+            "AUTH_REGISTER": self._handle_auth_register,
+            "AUTH_LOGIN": self._handle_auth_login,
+            "AUTH_RESTORE": self._handle_auth_restore,
+            "HISTORY_REQUEST": self._handle_history_request,
+            "MCP_CONFIG_GET": self._handle_mcp_config_get,
+            "MCP_CONFIG_UPDATE": self._handle_mcp_config_update,
+            "PERSONA_CLEAR_HISTORY": self._handle_persona_clear_history,
+            "MESSAGE_DELETE": self._handle_message_delete,
+            "PERSONA_DELETE": self._handle_persona_delete,
+            "FILE_UPLOAD_INIT": self._handle_file_upload_init,
+            "FILE_UPLOAD_CHUNK": self._handle_file_upload_chunk,
+            "FILE_UPLOAD_COMPLETE": self._handle_file_upload_complete,
+            "VOICE_CONFIG_GET": self._handle_voice_config_get,
+            "VOICE_CONFIG_SET": self._handle_voice_config_set,
+            "VOICE_TTS_REQUEST": self._dispatch_voice_tts_request,
+            "VOICE_INTERRUPT": self._handle_voice_interrupt,
+            "TTS_CANCEL": self._handle_voice_interrupt,
+        }
 
         self.metadata = PlatformMetadata(
             name="lumi_hub",
@@ -522,168 +551,12 @@ class LumiHubAdapter(Platform):
         """处理从 WebSocket Client 收到的业务消息。"""
         msg_type = message.get("type", "")
 
-        if msg_type == "CHAT_REQUEST":
-            await self._handle_chat_request(message, ws_session_id)
-        elif msg_type == "PERSONA_SWITCH":
-            await self._handle_persona_switch(message, ws_session_id)
-        elif msg_type == "PERSONA_LIST":
-            await self._handle_persona_list(message, ws_session_id)
-        elif msg_type == "AUTH_REGISTER":
-            await self._handle_auth_register(message, ws_session_id)
-        elif msg_type == "AUTH_LOGIN":
-            await self._handle_auth_login(message, ws_session_id)
-        elif msg_type == "AUTH_RESTORE":
-            await self._handle_auth_restore(message, ws_session_id)
-        elif msg_type == "HISTORY_REQUEST":
-            await self._handle_history_request(message, ws_session_id)
-        elif msg_type == "MCP_CONFIG_GET":
-            await self._handle_mcp_config_get(message, ws_session_id)
-        elif msg_type == "MCP_CONFIG_UPDATE":
-            await self._handle_mcp_config_update(message, ws_session_id)
-        elif msg_type == "PERSONA_CLEAR_HISTORY":
-            await self._handle_persona_clear_history(message, ws_session_id)
-        elif msg_type == "MESSAGE_DELETE":
-            await self._handle_message_delete(message, ws_session_id)
-        elif msg_type == "PERSONA_DELETE":
-            await self._handle_persona_delete(message, ws_session_id)
-        elif msg_type == "FILE_UPLOAD_INIT":
-            await self._handle_file_upload_init(message, ws_session_id)
-        elif msg_type == "FILE_UPLOAD_CHUNK":
-            await self._handle_file_upload_chunk(message, ws_session_id)
-        elif msg_type == "FILE_UPLOAD_COMPLETE":
-            await self._handle_file_upload_complete(message, ws_session_id)
-        elif msg_type == "VOICE_CONFIG_GET":
-            await self._handle_voice_config_get(message, ws_session_id)
-        elif msg_type == "VOICE_CONFIG_SET":
-            await self._handle_voice_config_set(message, ws_session_id)
-        elif msg_type == "VOICE_TTS_REQUEST":
-            self._spawn_voice_tts_task(message, ws_session_id)
-        elif msg_type in ("VOICE_INTERRUPT", "TTS_CANCEL"):
-            await self._handle_voice_interrupt(message, ws_session_id)
-        else:
+        handler = self._message_handlers.get(msg_type)
+        if handler is None:
             logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
-
-    async def _handle_voice_config_get(self, message: dict, ws_session_id: str) -> None:
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        user_id = self.active_sessions.get(ws_session_id)
-        if not user_id:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id,
-                "type": "VOICE_CONFIG_RESPONSE",
-                "source": "host",
-                "target": "client",
-                "timestamp": int(time.time() * 1000),
-                "payload": {
-                    "status": "error",
-                    "message": "请先登录",
-                },
-            })
             return
 
-        provider = self._dashscope_provider
-        if provider is None:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id,
-                "type": "VOICE_CONFIG_RESPONSE",
-                "source": "host",
-                "target": "client",
-                "timestamp": int(time.time() * 1000),
-                "payload": {
-                    "status": "error",
-                    "message": "Voice provider is not initialized",
-                },
-            })
-            return
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "VOICE_CONFIG_RESPONSE",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "status": "success",
-                "config": {
-                    "provider": "dashscope",
-                    "voice_id": provider.default_voice,
-                    "api_key_configured": provider.has_api_key(),
-                    "api_key_source": provider.get_api_key_source(),
-                    "api_key_masked": provider.get_masked_api_key(),
-                },
-            },
-        })
-
-    async def _handle_voice_config_set(self, message: dict, ws_session_id: str) -> None:
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        user_id = self.active_sessions.get(ws_session_id)
-        if not user_id:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id,
-                "type": "VOICE_CONFIG_SET_RESPONSE",
-                "source": "host",
-                "target": "client",
-                "timestamp": int(time.time() * 1000),
-                "payload": {
-                    "status": "error",
-                    "message": "请先登录",
-                },
-            })
-            return
-
-        provider = self._dashscope_provider
-        if provider is None:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id,
-                "type": "VOICE_CONFIG_SET_RESPONSE",
-                "source": "host",
-                "target": "client",
-                "timestamp": int(time.time() * 1000),
-                "payload": {
-                    "status": "error",
-                    "message": "Voice provider is not initialized",
-                },
-            })
-            return
-
-        payload = message.get("payload", {})
-        config = payload.get("config", {}) if isinstance(payload, dict) else {}
-        if not isinstance(config, dict):
-            config = {}
-
-        voice_id = str(config.get("voice_id", "") or "").strip()
-        api_key = str(config.get("api_key", "") or "").strip()
-        clear_api_key = bool(config.get("clear_api_key", False))
-
-        if voice_id:
-            provider.default_voice = voice_id
-            self._voice_config_cache["dashscope_voice_id"] = voice_id
-
-        if clear_api_key:
-            provider.set_api_key("")
-            self._voice_config_cache.pop("dashscope_api_key", None)
-        elif api_key:
-            provider.set_api_key(api_key)
-            self._voice_config_cache["dashscope_api_key"] = api_key
-
-        self._save_voice_config()
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "VOICE_CONFIG_SET_RESPONSE",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "status": "success",
-                "config": {
-                    "provider": "dashscope",
-                    "voice_id": provider.default_voice,
-                    "api_key_configured": provider.has_api_key(),
-                    "api_key_source": provider.get_api_key_source(),
-                    "api_key_masked": provider.get_masked_api_key(),
-                },
-            },
-        })
+        await handler(message, ws_session_id)
 
     async def _handle_ws_disconnect(self, ws_session_id: str) -> None:
         """WebSocket 断开后的资源清理。"""
@@ -707,619 +580,6 @@ class LumiHubAdapter(Platform):
         ]
         for upload_id in stale_upload_ids:
             self._discard_upload_session(upload_id)
-
-    def _spawn_voice_tts_task(self, message: dict, ws_session_id: str) -> None:
-        task = asyncio.create_task(self._handle_voice_tts_request(message, ws_session_id))
-        task.add_done_callback(self._track_voice_tts_task)
-
-    def _track_voice_tts_task(self, task: asyncio.Task) -> None:
-        try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc:
-            logger.error(f"[Lumi-Hub] VOICE_TTS_REQUEST task failed: {exc}")
-
-    async def _handle_voice_interrupt(self, message: dict, ws_session_id: str) -> None:
-        payload = message.get("payload", {})
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        turn_id = str(payload.get("turn_id", "") or "").strip()
-
-        if turn_id:
-            await self.speech_sessions.cancel_turn(ws_session_id, turn_id)
-        else:
-            turn_id = await self.speech_sessions.cancel_active_turn(ws_session_id) or ""
-
-        if turn_id:
-            await self.voice_registry.cancel_all(ws_session_id, turn_id)
-            running_task = self._voice_turn_tasks.pop((ws_session_id, turn_id), None)
-            if running_task and not running_task.done():
-                running_task.cancel()
-            status = "cancelled"
-        else:
-            status = "no_active_turn"
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "VOICE_INTERRUPT_ACK",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "turn_id": turn_id,
-                "status": status,
-            },
-        })
-
-    async def _handle_voice_tts_request(self, message: dict, ws_session_id: str) -> None:
-        payload = message.get("payload", {})
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        user_id = self.active_sessions.get(ws_session_id)
-        if not user_id:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id,
-                "type": "ERROR_ALERT",
-                "source": "host",
-                "target": "client",
-                "timestamp": int(time.time() * 1000),
-                "payload": {
-                    "error_code": "UNAUTHORIZED",
-                    "detail": "Please login first",
-                },
-            })
-            return
-
-        text = str(payload.get("text", "") or "")
-        turn_id = str(payload.get("turn_id", "") or str(uuid.uuid4())[:8])
-        provider_name = str(payload.get("provider", "") or "").strip() or None
-        voice_id = str(payload.get("voice_id", "") or "").strip()
-        raw_use_ssml = payload.get("use_ssml", True)
-        if isinstance(raw_use_ssml, str):
-            use_ssml = raw_use_ssml.strip().lower() in ("1", "true", "yes", "on")
-        else:
-            use_ssml = bool(raw_use_ssml)
-        try:
-            chunk_bytes = int(payload.get("chunk_bytes", 32768) or 32768)
-        except (TypeError, ValueError):
-            chunk_bytes = 32768
-        raw_style_plan = payload.get("style_plan")
-        raw_auto_style = payload.get("auto_style", True)
-        if isinstance(raw_auto_style, str):
-            auto_style = raw_auto_style.strip().lower() in ("1", "true", "yes", "on")
-        else:
-            auto_style = bool(raw_auto_style)
-        if isinstance(raw_style_plan, dict):
-            style_plan = build_style_plan(raw_style_plan)
-        elif auto_style:
-            style_plan = plan_style_for_text(text)
-        else:
-            style_plan = build_style_plan(None)
-        custom_ssml = str(payload.get("ssml", "") or "").strip()
-        if custom_ssml:
-            use_ssml = True
-
-        provider = self.voice_registry.get_tts(provider_name)
-        if not provider:
-            await self._send_tts_stream_end(
-                ws_session_id,
-                msg_id,
-                turn_id,
-                status="error",
-                detail="No TTS provider registered",
-            )
-            return
-
-        if not text.strip() and not custom_ssml:
-            await self._send_tts_stream_end(
-                ws_session_id,
-                msg_id,
-                turn_id,
-                status="error",
-                detail="Text is empty",
-            )
-            return
-
-        if use_ssml and not provider.supports_ssml:
-            await self._send_tts_stream_end(
-                ws_session_id,
-                msg_id,
-                turn_id,
-                status="error",
-                detail=f"Provider '{provider.provider_name}' does not support SSML",
-            )
-            return
-
-        replaced_turn = await self.speech_sessions.activate_turn(ws_session_id, turn_id)
-        if replaced_turn:
-            await self.voice_registry.cancel_all(ws_session_id, replaced_turn)
-            old_task = self._voice_turn_tasks.pop((ws_session_id, replaced_turn), None)
-            if old_task and old_task is not asyncio.current_task() and not old_task.done():
-                old_task.cancel()
-
-        current_task = asyncio.current_task()
-        if current_task:
-            self._voice_turn_tasks[(ws_session_id, turn_id)] = current_task
-
-        ssml_text = custom_ssml
-        if use_ssml and not ssml_text:
-            ssml_text = compile_ssml(text=text, style_plan=style_plan, voice_id=voice_id)
-
-        request = TTSRequest(
-            ws_session_id=ws_session_id,
-            turn_id=turn_id,
-            request_id=msg_id,
-            text=text,
-            voice_id=voice_id,
-            use_ssml=use_ssml,
-            ssml=ssml_text,
-            style_plan=style_plan,
-            chunk_bytes=chunk_bytes,
-        )
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "TTS_STREAM_START",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "turn_id": turn_id,
-                "provider": provider.provider_name,
-                "format": provider.output_format,
-                "sample_rate": provider.sample_rate,
-                "status": "started",
-            },
-        })
-
-        seq_count = 0
-        status = "success"
-        detail = ""
-        try:
-            async for chunk in provider.synthesize_stream(request):
-                if not await self.speech_sessions.is_active(ws_session_id, turn_id):
-                    status = "interrupted"
-                    detail = "Turn interrupted"
-                    break
-
-                encoded = base64.b64encode(chunk.data).decode("ascii")
-                await self.ws_server.send_to_client(ws_session_id, {
-                    "message_id": msg_id,
-                    "type": "TTS_STREAM_CHUNK",
-                    "source": "host",
-                    "target": "client",
-                    "timestamp": int(time.time() * 1000),
-                    "payload": {
-                        "turn_id": turn_id,
-                        "seq": chunk.seq,
-                        "audio_base64": encoded,
-                        "format": provider.output_format,
-                        "sample_rate": provider.sample_rate,
-                    },
-                })
-                seq_count = chunk.seq + 1
-
-            if status == "success" and not await self.speech_sessions.is_active(ws_session_id, turn_id):
-                status = "interrupted"
-                detail = "Turn interrupted"
-        except VoiceProviderError as exc:
-            status = "error"
-            detail = str(exc)
-        except asyncio.CancelledError:
-            status = "interrupted"
-            detail = "Voice task cancelled"
-        except Exception as exc:
-            status = "error"
-            detail = str(exc)
-            logger.error(f"[Lumi-Hub] Voice synthesis failed: {exc}")
-        finally:
-            await self._send_tts_stream_end(
-                ws_session_id,
-                msg_id,
-                turn_id,
-                status=status,
-                detail=detail,
-                seq_count=seq_count,
-            )
-            await self.speech_sessions.finish_turn(ws_session_id, turn_id)
-            self._voice_turn_tasks.pop((ws_session_id, turn_id), None)
-
-    async def _send_tts_stream_end(
-        self,
-        ws_session_id: str,
-        message_id: str,
-        turn_id: str,
-        status: str,
-        detail: str,
-        seq_count: int = 0,
-    ) -> None:
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": message_id,
-            "type": "TTS_STREAM_END",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "turn_id": turn_id,
-                "status": status,
-                "detail": detail,
-                "seq_count": seq_count,
-            },
-        })
-
-    def _normalize_mime(self, file_name: str, mime_type: str) -> str:
-        guessed = mimetypes.guess_type(file_name)[0]
-        final_mime = (mime_type or guessed or "application/octet-stream").lower()
-        return final_mime
-
-    def _is_allowed_mime(self, mime_type: str) -> bool:
-        if mime_type in self.allowed_mime_exact:
-            return True
-        return any(mime_type.startswith(prefix) for prefix in self.allowed_mime_prefixes)
-
-    def _safe_file_name(self, file_name: str) -> str:
-        base_name = os.path.basename(file_name or "file.bin")
-        # 避免目录穿越，替换常见危险字符
-        return "".join(c if c not in '<>:"/\\|?*' else '_' for c in base_name)
-
-    def _extract_pdf_preview(self, abs_path: str, max_chars: int = 6000, max_pages: int = 5) -> str:
-        """提取 PDF 的前几页文本用于提示词增强。若依赖缺失或解析失败则返回空字符串。"""
-        if not abs_path or not os.path.exists(abs_path):
-            return ""
-        try:
-            from pypdf import PdfReader  # type: ignore
-        except Exception:
-            return ""
-
-        try:
-            reader = PdfReader(abs_path)
-            parts: list[str] = []
-            for idx, page in enumerate(reader.pages):
-                if idx >= max_pages:
-                    break
-                text = page.extract_text() or ""
-                if text.strip():
-                    parts.append(text.strip())
-                if sum(len(p) for p in parts) >= max_chars:
-                    break
-            merged = "\n\n".join(parts).strip()
-            if len(merged) > max_chars:
-                merged = merged[:max_chars]
-            return merged
-        except Exception as e:
-            logger.warning(f"[Lumi-Hub] PDF 解析失败: {e}")
-            return ""
-
-    async def _send_upload_error(self, ws_session_id: str, msg_id: str, detail: str, upload_id: str = "") -> None:
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "FILE_UPLOAD_ERROR",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "upload_id": upload_id,
-                "detail": detail,
-            },
-        })
-
-    def _discard_upload_session(self, upload_id: str) -> None:
-        session = self.upload_sessions.pop(upload_id, None)
-        if not session:
-            return
-        tmp_path = session.get("tmp_path", "")
-        try:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception as e:
-            logger.warning(f"[Lumi-Hub] 清理临时上传文件失败: {e}")
-
-    async def _handle_file_upload_init(self, message: dict, ws_session_id: str) -> None:
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        user_id = self.active_sessions.get(ws_session_id)
-        if not user_id:
-            await self._send_upload_error(ws_session_id, msg_id, "请先登录")
-            return
-
-        payload = message.get("payload", {})
-        file_name = self._safe_file_name(payload.get("file_name", "file.bin"))
-        mime_type = self._normalize_mime(file_name, payload.get("mime_type", ""))
-        size_bytes = int(payload.get("size_bytes", 0) or 0)
-        sha256_expected = str(payload.get("sha256", "") or "").lower()
-
-        if size_bytes <= 0:
-            await self._send_upload_error(ws_session_id, msg_id, "无效文件大小")
-            return
-        if size_bytes > self.max_upload_size_bytes:
-            await self._send_upload_error(ws_session_id, msg_id, f"文件过大，最大支持 {self.max_upload_size_bytes} 字节")
-            return
-        if not self._is_allowed_mime(mime_type):
-            await self._send_upload_error(ws_session_id, msg_id, f"不支持的文件类型: {mime_type}")
-            return
-
-        upload_id = str(uuid.uuid4())
-        tmp_path = os.path.join(self.upload_staging_dir, f"{upload_id}.part")
-        # 先创建空文件，便于后续追加
-        with open(tmp_path, "wb"):
-            pass
-
-        self.upload_sessions[upload_id] = {
-            "user_id": user_id,
-            "ws_session_id": ws_session_id,
-            "file_name": file_name,
-            "mime_type": mime_type,
-            "size_bytes": size_bytes,
-            "sha256_expected": sha256_expected,
-            "tmp_path": tmp_path,
-            "received_bytes": 0,
-            "hasher": hashlib.sha256(),
-            "started_at": int(time.time()),
-        }
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "FILE_UPLOAD_ACK",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "phase": "init",
-                "upload_id": upload_id,
-                "chunk_size_hint": 262144,
-                "status": "ready",
-            },
-        })
-
-    async def _handle_file_upload_chunk(self, message: dict, ws_session_id: str) -> None:
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        payload = message.get("payload", {})
-        upload_id = str(payload.get("upload_id", "") or "")
-        chunk_b64 = payload.get("chunk_base64") or payload.get("chunk") or ""
-        chunk_index = int(payload.get("chunk_index", 0) or 0)
-
-        session = self.upload_sessions.get(upload_id)
-        if not session:
-            await self._send_upload_error(ws_session_id, msg_id, "上传会话不存在", upload_id)
-            return
-        if session.get("ws_session_id") != ws_session_id:
-            await self._send_upload_error(ws_session_id, msg_id, "上传会话不匹配", upload_id)
-            return
-
-        try:
-            chunk_bytes = base64.b64decode(chunk_b64, validate=True)
-        except Exception:
-            self._discard_upload_session(upload_id)
-            await self._send_upload_error(ws_session_id, msg_id, "分片不是合法 base64", upload_id)
-            return
-
-        if not chunk_bytes:
-            await self._send_upload_error(ws_session_id, msg_id, "空分片无效", upload_id)
-            return
-
-        session["received_bytes"] += len(chunk_bytes)
-        if session["received_bytes"] > session["size_bytes"]:
-            self._discard_upload_session(upload_id)
-            await self._send_upload_error(ws_session_id, msg_id, "接收字节超过声明大小", upload_id)
-            return
-
-        try:
-            with open(session["tmp_path"], "ab") as f:
-                f.write(chunk_bytes)
-            session["hasher"].update(chunk_bytes)
-        except Exception as e:
-            self._discard_upload_session(upload_id)
-            await self._send_upload_error(ws_session_id, msg_id, f"写入分片失败: {e}", upload_id)
-            return
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "FILE_UPLOAD_ACK",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "phase": "chunk",
-                "upload_id": upload_id,
-                "chunk_index": chunk_index,
-                "received_bytes": session["received_bytes"],
-            },
-        })
-
-    async def _handle_file_upload_complete(self, message: dict, ws_session_id: str) -> None:
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        payload = message.get("payload", {})
-        upload_id = str(payload.get("upload_id", "") or "")
-        session = self.upload_sessions.get(upload_id)
-
-        if not session:
-            await self._send_upload_error(ws_session_id, msg_id, "上传会话不存在", upload_id)
-            return
-        if session.get("ws_session_id") != ws_session_id:
-            await self._send_upload_error(ws_session_id, msg_id, "上传会话不匹配", upload_id)
-            return
-
-        if session["received_bytes"] != session["size_bytes"]:
-            self._discard_upload_session(upload_id)
-            await self._send_upload_error(
-                ws_session_id,
-                msg_id,
-                f"文件大小不匹配: expected={session['size_bytes']} received={session['received_bytes']}",
-                upload_id,
-            )
-            return
-
-        actual_sha256 = session["hasher"].hexdigest().lower()
-        expected_sha256 = session.get("sha256_expected", "")
-        if expected_sha256 and expected_sha256 != actual_sha256:
-            self._discard_upload_session(upload_id)
-            await self._send_upload_error(ws_session_id, msg_id, "文件哈希校验失败", upload_id)
-            return
-
-        now = time.localtime()
-        final_dir = os.path.join(
-            self.upload_root_dir,
-            f"user_{session['user_id']}",
-            f"{now.tm_year:04d}",
-            f"{now.tm_mon:02d}",
-            f"{now.tm_mday:02d}",
-        )
-        os.makedirs(final_dir, exist_ok=True)
-
-        final_name = f"{upload_id}_{session['file_name']}"
-        final_abs_path = os.path.join(final_dir, final_name)
-        final_rel_path = os.path.relpath(final_abs_path, self.data_dir).replace("\\", "/")
-
-        try:
-            os.replace(session["tmp_path"], final_abs_path)
-            attachment = self.db.create_attachment(
-                user_id=session["user_id"],
-                file_name=session["file_name"],
-                storage_path=final_rel_path,
-                mime_type=session["mime_type"],
-                size_bytes=session["size_bytes"],
-                sha256=actual_sha256,
-            )
-        except Exception as e:
-            self._discard_upload_session(upload_id)
-            await self._send_upload_error(ws_session_id, msg_id, f"完成上传失败: {e}", upload_id)
-            return
-
-        self.upload_sessions.pop(upload_id, None)
-
-        await self.ws_server.send_to_client(ws_session_id, {
-            "message_id": msg_id,
-            "type": "FILE_UPLOAD_ACK",
-            "source": "host",
-            "target": "client",
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "phase": "complete",
-                "upload_id": upload_id,
-                "status": "success",
-                "attachment": attachment,
-            },
-        })
-
-    async def _handle_mcp_config_get(self, message: dict, ws_session_id: str) -> None:
-        """获取当前 MCP 配置"""
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        mcp_manager = _lumi_shared_state.get("mcp_manager")
-        
-        if mcp_manager:
-            config = mcp_manager.get_config()
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "MCP_CONFIG_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "success", "config": config}
-            })
-        else:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "MCP_CONFIG_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": "MCP Manager not initialized"}
-            })
-
-    async def _handle_mcp_config_update(self, message: dict, ws_session_id: str) -> None:
-        """更新并热重载 MCP 配置"""
-        payload = message.get("payload", {})
-        config = payload.get("config", {})
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        
-        mcp_manager = _lumi_shared_state.get("mcp_manager")
-        if mcp_manager:
-            try:
-                await mcp_manager.update_config(config)
-                await self.ws_server.send_to_client(ws_session_id, {
-                    "message_id": msg_id, "type": "MCP_CONFIG_UPDATE_RESPONSE", "source": "host", "target": "client",
-                    "payload": {"status": "success", "message": "Config updated and servers hot-reloaded"}
-                })
-            except Exception as e:
-                logger.error(f"[Lumi-Hub] 热重载 MCP 失败: {e}")
-                await self.ws_server.send_to_client(ws_session_id, {
-                    "message_id": msg_id, "type": "MCP_CONFIG_UPDATE_RESPONSE", "source": "host", "target": "client",
-                    "payload": {"status": "error", "message": str(e)}
-                })
-        else:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "MCP_CONFIG_UPDATE_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": "MCP Manager not initialized"}
-            })
-
-    async def _handle_auth_register(self, message: dict, ws_session_id: str) -> None:
-        payload = message.get("payload", {})
-        username = payload.get("username", "")
-        password = payload.get("password", "")
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        try:
-            result = self.db.create_user(username, password)
-        except Exception as e:
-            logger.error(f"[Lumi-Hub] 注册时数据库异常: {e}")
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": f"Server error: {e}"}
-            })
-            return
-        
-        if "error" in result:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": result["error"]}
-            })
-        else:
-            # 注册成功直接登录
-            self.active_sessions[ws_session_id] = result["id"]
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "success", "user": {"id": result["id"], "username": result["username"]}, "token": result.get("token", "")}
-            })
-            logger.info(f"[Lumi-Hub] 用户注册并登录成功: {username}")
-
-    async def _handle_auth_login(self, message: dict, ws_session_id: str) -> None:
-        payload = message.get("payload", {})
-        username = payload.get("username", "")
-        password = payload.get("password", "")
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        try:
-            result = self.db.verify_user(username, password)
-        except Exception as e:
-            logger.error(f"[Lumi-Hub] 登录时数据库异常: {e}")
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": f"Server error: {e}"}
-            })
-            return
-        
-        if "error" in result:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": result["error"]}
-            })
-        else:
-            self.active_sessions[ws_session_id] = result["id"]
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "success", "user": {"id": result["id"], "username": result["username"]}, "token": result.get("token", "")}
-            })
-            logger.info(f"[Lumi-Hub] 用户登录成功: {username}")
-
-    async def _handle_auth_restore(self, message: dict, ws_session_id: str) -> None:
-        payload = message.get("payload", {})
-        token = payload.get("token", "")
-        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-
-        if not token:
-            return
-
-        user = self.db.get_user_by_token(token)
-        if user:
-            self.active_sessions[ws_session_id] = user["id"]
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "success", "user": user, "token": token}
-            })
-            logger.info(f"[Lumi-Hub] 用户通过 Token 恢复会话成功: {user['username']}")
-        else:
-            await self.ws_server.send_to_client(ws_session_id, {
-                "message_id": msg_id, "type": "AUTH_RESPONSE", "source": "host", "target": "client",
-                "payload": {"status": "error", "message": "Invalid or expired token"}
-            })
 
     async def _handle_history_request(self, message: dict, ws_session_id: str) -> None:
         user_id = self.active_sessions.get(ws_session_id)
