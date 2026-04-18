@@ -5,12 +5,29 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/message.dart';
 
 enum WsStatus { disconnected, connecting, connected }
+
+class _TtsTurnBuffer {
+  _TtsTurnBuffer({required this.format});
+
+  final String format;
+  final Map<int, List<int>> chunks = <int, List<int>>{};
+
+  List<int> mergeBytes() {
+    final merged = <int>[];
+    final orderedKeys = chunks.keys.toList()..sort();
+    for (final seq in orderedKeys) {
+      merged.addAll(chunks[seq] ?? const <int>[]);
+    }
+    return merged;
+  }
+}
 
 class WsService extends ChangeNotifier {
   static const String _defaultUrl = 'ws://127.0.0.1:8765';
@@ -70,6 +87,81 @@ class WsService extends ChangeNotifier {
   Stream<Map<String, dynamic>> get mcpConfigResponses =>
       _mcpConfigController.stream;
 
+  // 语音消息流
+  final _voiceEventController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get voiceEvents => _voiceEventController.stream;
+
+  final Map<String, _TtsTurnBuffer> _ttsBuffers = <String, _TtsTurnBuffer>{};
+  final Map<String, String> _ttsAudioFiles = <String, String>{};
+  final Set<String> _ttsGeneratingTurns = <String>{};
+  AudioPlayer? _ttsPlayer;
+  StreamSubscription<PlayerState>? _ttsPlayerStateSub;
+  bool _isTtsPlaying = false;
+  String? _playingTtsTurnId;
+  bool _ttsOperationLocked = false;
+
+  bool get isTtsPlaying => _isTtsPlaying;
+  String? get playingTtsTurnId => _playingTtsTurnId;
+
+  bool hasTtsAudio(String turnId) {
+    final normalized = turnId.trim();
+    if (normalized.isEmpty) return false;
+
+    final cachedPath = _ttsAudioFiles[normalized];
+    if (cachedPath != null && cachedPath.isNotEmpty) {
+      if (File(cachedPath).existsSync()) {
+        return true;
+      }
+      _ttsAudioFiles.remove(normalized);
+    }
+
+    final recoveredPath = _recoverTtsAudioPath(normalized);
+    if (recoveredPath != null) {
+      _ttsAudioFiles[normalized] = recoveredPath;
+      return true;
+    }
+
+    return false;
+  }
+  bool isTtsGenerating(String turnId) => _ttsGeneratingTurns.contains(turnId);
+
+  Directory _resolveTtsCacheDir() {
+    if (!kIsWeb && Platform.isWindows) {
+      final localAppData = Platform.environment['LOCALAPPDATA'];
+      if (localAppData != null && localAppData.trim().isNotEmpty) {
+        return Directory(
+          '$localAppData${Platform.pathSeparator}Lumi-Hub${Platform.pathSeparator}tts_cache',
+        );
+      }
+    }
+
+    return Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}lumi_hub_tts_cache',
+    );
+  }
+
+  String? _recoverTtsAudioPath(String turnId) {
+    final dirs = <Directory>[_resolveTtsCacheDir()];
+    final legacyTempDir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}lumi_hub_tts_cache',
+    );
+    if (!dirs.any((d) => d.path == legacyTempDir.path)) {
+      dirs.add(legacyTempDir);
+    }
+
+    const candidates = <String>['mp3', 'wav', 'ogg'];
+    for (final dir in dirs) {
+      for (final ext in candidates) {
+        final path = '${dir.path}${Platform.pathSeparator}$turnId.$ext';
+        if (File(path).existsSync()) {
+          return path;
+        }
+      }
+    }
+    return null;
+  }
+
   // 人格列表 & 当前激活人格
   List<Map<String, dynamic>> _personas = [];
   List<Map<String, dynamic>> get personas => List.unmodifiable(_personas);
@@ -101,7 +193,29 @@ class WsService extends ChangeNotifier {
   String get accessKey => _accessKey;
 
   WsService() {
+    _initTtsPlayer();
     _initAuth();
+  }
+
+  void _initTtsPlayer() {
+    if (kIsWeb) return;
+    _ttsPlayer = AudioPlayer();
+    _ttsPlayerStateSub = _ttsPlayer!.playerStateStream.listen((state) {
+      final isPlaying = state.playing;
+      final completed = state.processingState == ProcessingState.completed;
+      final nextPlaying = isPlaying && !completed;
+      if (_isTtsPlaying != nextPlaying) {
+        _isTtsPlaying = nextPlaying;
+        if (!nextPlaying && completed) {
+          _playingTtsTurnId = null;
+        }
+        notifyListeners();
+      }
+      if (completed && _playingTtsTurnId != null) {
+        _playingTtsTurnId = null;
+        notifyListeners();
+      }
+    });
   }
 
   Future<void> _initAuth() async {
@@ -232,7 +346,10 @@ class WsService extends ChangeNotifier {
 
   // ── 发送消息 ───────────────────────────────────────────────────────────
 
-  void sendMessage(String text, {List<Map<String, dynamic>> attachments = const []}) {
+  void sendMessage(
+    String text, {
+    List<Map<String, dynamic>> attachments = const [],
+  }) {
     final normalized = text.trim();
     if (_status != WsStatus.connected) return;
     if (normalized.isEmpty && attachments.isEmpty) return;
@@ -348,6 +465,21 @@ class WsService extends ChangeNotifier {
         case 'MCP_CONFIG_UPDATE_RESPONSE':
           _mcpConfigController.add(data);
           break;
+        case 'VOICE_CONFIG_RESPONSE':
+        case 'VOICE_CONFIG_SET_RESPONSE':
+        case 'VOICE_INTERRUPT_ACK':
+          _voiceEventController.add(data);
+          break;
+        case 'TTS_STREAM_START':
+          _handleTtsStreamStart(data);
+          _voiceEventController.add(data);
+          break;
+        case 'TTS_STREAM_CHUNK':
+          _handleTtsStreamChunk(data);
+          break;
+        case 'TTS_STREAM_END':
+          unawaited(_handleTtsStreamEndAndNotify(data));
+          break;
         case 'FILE_UPLOAD_ACK':
         case 'FILE_UPLOAD_ERROR':
           _handlePendingResponse(data);
@@ -406,7 +538,7 @@ class WsService extends ChangeNotifier {
     _messages.removeWhere((m) => m.isTyping);
     _messages.add(
       ChatMessage(
-          id: assistantId,
+        id: assistantId,
         content: content,
         sender: MessageSender.ai,
         time: DateTime.now(),
@@ -506,7 +638,9 @@ class WsService extends ChangeNotifier {
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
     final messagesJson = payload['messages'] as List<dynamic>? ?? [];
     final hasMore = payload['has_more'] == true;
-    final offset = msgId != null ? (_historyRequestOffsets.remove(msgId) ?? 0) : 0;
+    final offset = msgId != null
+        ? (_historyRequestOffsets.remove(msgId) ?? 0)
+        : 0;
 
     final loaded = <ChatMessage>[];
     for (var m in messagesJson) {
@@ -574,6 +708,223 @@ class WsService extends ChangeNotifier {
     }
   }
 
+  void _handleTtsStreamStart(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final turnId = (payload['turn_id'] as String? ?? '').trim();
+    if (turnId.isEmpty) return;
+
+    final format = ((payload['format'] as String?) ?? 'mp3')
+        .trim()
+        .toLowerCase();
+    _ttsBuffers[turnId] = _TtsTurnBuffer(
+      format: format.isEmpty ? 'mp3' : format,
+    );
+    _ttsGeneratingTurns.add(turnId);
+    notifyListeners();
+  }
+
+  void _handleTtsStreamChunk(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final turnId = (payload['turn_id'] as String? ?? '').trim();
+    if (turnId.isEmpty) return;
+
+    final buffer = _ttsBuffers.putIfAbsent(
+      turnId,
+      () => _TtsTurnBuffer(format: 'mp3'),
+    );
+    final seqValue = payload['seq'];
+    final seq = seqValue is num ? seqValue.toInt() : 0;
+    final b64 = (payload['audio_base64'] as String? ?? '').trim();
+    if (b64.isEmpty) return;
+
+    try {
+      final bytes = base64Decode(b64);
+      buffer.chunks[seq] = bytes;
+    } catch (e) {
+      debugPrint('[WS] 解码 TTS 分片失败: $e');
+    }
+  }
+
+  Future<void> _handleTtsStreamEnd(Map<String, dynamic> data) async {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final turnId = (payload['turn_id'] as String? ?? '').trim();
+    if (turnId.isEmpty) return;
+
+    final status = (payload['status'] as String? ?? '').trim().toLowerCase();
+    final buffer = _ttsBuffers.remove(turnId);
+    _ttsGeneratingTurns.remove(turnId);
+
+    if (status == 'success' && buffer != null && buffer.chunks.isNotEmpty) {
+      try {
+        final ext = _normalizeTtsExt(buffer.format);
+        final dir = _resolveTtsCacheDir();
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+
+        final filePath = '${dir.path}${Platform.pathSeparator}$turnId.$ext';
+        final file = File(filePath);
+        await file.writeAsBytes(buffer.mergeBytes(), flush: true);
+        _ttsAudioFiles[turnId] = filePath;
+      } catch (e) {
+        debugPrint('[WS] 保存 TTS 音频失败: $e');
+      }
+    }
+
+    notifyListeners();
+  }
+
+  Future<void> _handleTtsStreamEndAndNotify(Map<String, dynamic> data) async {
+    await _handleTtsStreamEnd(data);
+    _voiceEventController.add(data);
+  }
+
+  String _normalizeTtsExt(String raw) {
+    final value = raw.trim().toLowerCase();
+    if (value == 'wav' || value == 'ogg' || value == 'mp3') {
+      return value;
+    }
+    return 'mp3';
+  }
+
+  Future<void> playTtsAudio(String turnId) async {
+    if (kIsWeb) return;
+    final player = _ttsPlayer;
+    if (player == null) return;
+    if (_ttsOperationLocked) return;
+
+    final path = _ttsAudioFiles[turnId];
+    if (path == null || path.isEmpty) {
+      throw Exception('该消息尚未生成可播放语音');
+    }
+
+    final file = File(path);
+    if (!await file.exists()) {
+      _ttsAudioFiles.remove(turnId);
+      throw Exception('语音文件不存在，请稍后重试');
+    }
+
+    final fileSize = await file.length();
+    if (fileSize <= 0) {
+      _ttsAudioFiles.remove(turnId);
+      throw Exception('语音文件尚未准备完成，请稍后重试');
+    }
+
+    _ttsOperationLocked = true;
+
+    try {
+      if (_playingTtsTurnId == turnId && _isTtsPlaying) {
+        await stopTtsAudio();
+        return;
+      }
+
+      await player.stop();
+      _playingTtsTurnId = turnId;
+      _isTtsPlaying = false;
+      notifyListeners();
+
+      await player.setFilePath(path);
+      await player.play();
+    } catch (e) {
+      _isTtsPlaying = false;
+      _playingTtsTurnId = null;
+      notifyListeners();
+      rethrow;
+    } finally {
+      _ttsOperationLocked = false;
+    }
+  }
+
+  Future<void> stopTtsAudio() async {
+    final player = _ttsPlayer;
+    if (player == null) return;
+
+    await player.stop();
+    _isTtsPlaying = false;
+    _playingTtsTurnId = null;
+    notifyListeners();
+  }
+
+  void getVoiceConfig() {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'VOICE_CONFIG_GET',
+      'source': 'client',
+      'target': 'host',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': {},
+    });
+  }
+
+  void setVoiceConfig({
+    String provider = 'dashscope',
+    String voiceId = '',
+    String apiKey = '',
+    bool clearApiKey = false,
+  }) {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'VOICE_CONFIG_SET',
+      'source': 'client',
+      'target': 'host',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': {
+        'config': {
+          'provider': provider,
+          if (voiceId.trim().isNotEmpty) 'voice_id': voiceId.trim(),
+          if (apiKey.trim().isNotEmpty) 'api_key': apiKey.trim(),
+          'clear_api_key': clearApiKey,
+        },
+      },
+    });
+  }
+
+  void requestVoiceTts({
+    required String text,
+    required String turnId,
+    String provider = 'dashscope',
+    String voiceId = '',
+    bool useSsml = true,
+    bool autoStyle = true,
+  }) {
+    final normalizedText = text.trim();
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    if (normalizedText.isEmpty) return;
+
+    _send({
+      'message_id': _genId(),
+      'type': 'VOICE_TTS_REQUEST',
+      'source': 'client',
+      'target': 'host',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': {
+        'text': normalizedText,
+        'turn_id': turnId,
+        'provider': provider,
+        if (voiceId.trim().isNotEmpty) 'voice_id': voiceId.trim(),
+        'use_ssml': useSsml,
+        'auto_style': autoStyle,
+      },
+    });
+  }
+
+  void interruptVoice({String? turnId}) {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'VOICE_INTERRUPT',
+      'source': 'client',
+      'target': 'host',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': {
+        if (turnId != null && turnId.trim().isNotEmpty)
+          'turn_id': turnId.trim(),
+      },
+    });
+  }
+
   Future<Map<String, dynamic>> _sendAndAwaitResponse(
     String type,
     Map<String, dynamic> payload, {
@@ -635,16 +986,12 @@ class WsService extends ChangeNotifier {
     final sha256Hex = sha256.convert(bytes).toString();
 
     Future<Map<String, dynamic>> sendInit() {
-      return _sendAndAwaitResponse(
-        'FILE_UPLOAD_INIT',
-        {
-          'file_name': fileName,
-          'mime_type': mimeType,
-          'size_bytes': sizeBytes,
-          'sha256': sha256Hex,
-        },
-        timeout: const Duration(seconds: 15),
-      );
+      return _sendAndAwaitResponse('FILE_UPLOAD_INIT', {
+        'file_name': fileName,
+        'mime_type': mimeType,
+        'size_bytes': sizeBytes,
+        'sha256': sha256Hex,
+      }, timeout: const Duration(seconds: 15));
     }
 
     Map<String, dynamic> initResp;
@@ -951,8 +1298,11 @@ class WsService extends ChangeNotifier {
     _historyRequestOffsets.clear();
     _historyLoading = false;
     _isGenerating = false;
+    _ttsGeneratingTurns.clear();
+    _ttsBuffers.clear();
     _generationUnlockTimer?.cancel();
     _pingTimer?.cancel();
+    unawaited(stopTtsAudio());
     _setStatus(WsStatus.disconnected);
     _scheduleReconnect();
   }
@@ -1014,7 +1364,10 @@ class WsService extends ChangeNotifier {
     _disposed = true;
     _authRequestController.close();
     _mcpConfigController.close();
+    _voiceEventController.close();
     _personaController.close();
+    _ttsPlayerStateSub?.cancel();
+    _ttsPlayer?.dispose();
     disconnect();
     super.dispose();
   }

@@ -20,6 +20,7 @@ import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'components/approval_dialog.dart';
 import 'mcp_settings_screen.dart';
+import 'voice_settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -41,11 +42,17 @@ class _ChatScreenState extends State<ChatScreen> {
   int _lastMessageCount = 0;
   final Set<String> _selectedMessageIds = {};
   StreamSubscription? _authSubscription;
+  StreamSubscription<Map<String, dynamic>>? _voiceSubscription;
   String? _pendingFileName;
   bool _isUploadingAttachment = false;
   double _uploadProgress = 0;
   String? _uploadError;
   Map<String, dynamic>? _uploadedAttachment;
+  final Set<String> _ttsReadyMessageIds = <String>{};
+  final Set<String> _ttsGeneratingMessageIds = <String>{};
+  final Set<String> _ttsRequestedMessageIds = <String>{};
+  bool _pendingAutoTts = false;
+  bool _lastGeneratingState = false;
 
   String _readableUploadError(Object e) {
     final raw = e.toString().trim();
@@ -62,9 +69,24 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ws = context.read<WsService>();
       _authSubscription = ws.authRequests.listen(_handleAuthRequest);
+      _voiceSubscription = ws.voiceEvents.listen(_handleVoiceEvent);
       _lastMessageCount = ws.messages.length;
+      _lastGeneratingState = ws.isGenerating;
       _wsListener = () {
         if (!mounted) return;
+        final aliveIds = ws.messages.map((m) => m.id).toSet();
+        _ttsReadyMessageIds.removeWhere((id) => !aliveIds.contains(id));
+        _ttsGeneratingMessageIds.removeWhere((id) => !aliveIds.contains(id));
+        _ttsRequestedMessageIds.removeWhere((id) => !aliveIds.contains(id));
+
+        for (final msg in ws.messages) {
+          if (msg.sender == MessageSender.ai &&
+              !msg.isTyping &&
+              ws.hasTtsAudio(msg.id)) {
+            _ttsReadyMessageIds.add(msg.id);
+          }
+        }
+
         final count = ws.messages.length;
         if (count == 0) {
           _pendingInitialBottom = true;
@@ -84,7 +106,10 @@ class _ChatScreenState extends State<ChatScreen> {
           });
         }
 
+        _maybeTriggerAutoTts(ws);
+
         _lastMessageCount = count;
+        _lastGeneratingState = ws.isGenerating;
       };
       ws.addListener(_wsListener!);
     });
@@ -108,6 +133,120 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _handleVoiceEvent(Map<String, dynamic> event) {
+    if (!mounted) return;
+    final ws = context.read<WsService>();
+
+    final type = event['type'] as String? ?? '';
+    final payload = event['payload'] as Map<String, dynamic>? ?? {};
+    final turnId = (payload['turn_id'] as String? ?? '').trim();
+
+    if (turnId.isEmpty) return;
+
+    if (type == 'TTS_STREAM_START') {
+      setState(() {
+        _ttsGeneratingMessageIds.add(turnId);
+      });
+      return;
+    }
+
+    if (type == 'TTS_STREAM_END') {
+      final status = (payload['status'] as String? ?? '').trim().toLowerCase();
+      setState(() {
+        _ttsGeneratingMessageIds.remove(turnId);
+        if (status == 'success' && ws.hasTtsAudio(turnId)) {
+          _ttsReadyMessageIds.add(turnId);
+        }
+      });
+      return;
+    }
+  }
+
+  void _maybeTriggerAutoTts(WsService ws) {
+    final settings = context.read<AppSettings>();
+    if (!settings.enableAiVoiceOutput) return;
+
+    if (!(_lastGeneratingState && !ws.isGenerating)) {
+      return;
+    }
+
+    if (!_pendingAutoTts) return;
+
+    ChatMessage? latestAi;
+    for (var i = ws.messages.length - 1; i >= 0; i--) {
+      final msg = ws.messages[i];
+      if (msg.sender == MessageSender.ai &&
+          !msg.isTyping &&
+          msg.content.trim().isNotEmpty) {
+        latestAi = msg;
+        break;
+      }
+    }
+
+    if (latestAi == null) return;
+    if (_ttsRequestedMessageIds.contains(latestAi.id)) {
+      _pendingAutoTts = false;
+      return;
+    }
+
+    _pendingAutoTts = false;
+    _ttsRequestedMessageIds.add(latestAi.id);
+    _ttsGeneratingMessageIds.add(latestAi.id);
+
+    ws.requestVoiceTts(
+      text: latestAi.content,
+      turnId: latestAi.id,
+      voiceId: settings.ttsVoiceId,
+    );
+
+    setState(() {});
+  }
+
+  Future<void> _onReadAloudTap(WsService ws, ChatMessage msg) async {
+    if (msg.isTyping || msg.content.trim().isEmpty) return;
+
+    if (ws.playingTtsTurnId == msg.id && ws.isTtsPlaying) {
+      await ws.stopTtsAudio();
+      return;
+    }
+
+    if (ws.hasTtsAudio(msg.id)) {
+      try {
+        await ws.playTtsAudio(msg.id);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('播放失败: $e')));
+      }
+      return;
+    }
+
+    if (_ttsGeneratingMessageIds.contains(msg.id)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('语音仍在生成中，请稍候')));
+      return;
+    }
+
+    final settings = context.read<AppSettings>();
+    setState(() {
+      _ttsRequestedMessageIds.add(msg.id);
+      _ttsGeneratingMessageIds.add(msg.id);
+    });
+
+    ws.requestVoiceTts(
+      text: msg.content,
+      turnId: msg.id,
+      voiceId: settings.ttsVoiceId,
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已开始生成语音')));
+  }
+
   @override
   void dispose() {
     final ws = context.read<WsService>();
@@ -116,6 +255,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _scroll.removeListener(_onScrollMaybeLoadOlder);
     _authSubscription?.cancel();
+    _voiceSubscription?.cancel();
     _input.dispose();
     _scroll.dispose();
     _focusNode.dispose();
@@ -201,6 +341,14 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty && attachments.isEmpty) return;
 
     ws.sendMessage(text, attachments: attachments);
+    if (ws.isTtsPlaying) {
+      unawaited(ws.stopTtsAudio());
+      ws.interruptVoice();
+    }
+    final settings = context.read<AppSettings>();
+    if (settings.enableAiVoiceOutput) {
+      _pendingAutoTts = true;
+    }
     _input.clear();
     setState(() {
       _pendingFileName = null;
@@ -210,7 +358,6 @@ class _ChatScreenState extends State<ChatScreen> {
       _uploadedAttachment = null;
     });
     _focusNode.requestFocus();
-    // 滚到底部
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
@@ -264,7 +411,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _confirmDeleteMessages(WsService ws, Set<String> messageIds) async {
+  Future<void> _confirmDeleteMessages(
+    WsService ws,
+    Set<String> messageIds,
+  ) async {
     if (messageIds.isEmpty) return;
     final count = messageIds.length;
     final ok = await showDialog<bool>(
@@ -305,43 +455,22 @@ class _ChatScreenState extends State<ChatScreen> {
     if (ws.status != WsStatus.connected) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('未连接到 Host，暂时无法上传文件')));
-      return;
-    }
-    if (!ws.isAuthenticated) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('当前未登录，无法上传文件')));
+      ).showSnackBar(const SnackBar(content: Text('当前未连接，无法上传附件')));
       return;
     }
 
-    final picked = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
       allowMultiple: false,
-      type: FileType.custom,
-      allowedExtensions: [
-        'png',
-        'jpg',
-        'jpeg',
-        'gif',
-        'webp',
-        'pdf',
-        'mp4',
-        'webm',
-        'mov',
-      ],
+      withData: false,
     );
-    if (!mounted) return;
-
-    if (picked == null || picked.files.isEmpty) {
-      return;
-    }
-
-    final file = picked.files.first;
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.single;
     final filePath = file.path;
     if (filePath == null || filePath.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('文件路径无效，上传已取消')));
+      ).showSnackBar(const SnackBar(content: Text('无法读取文件路径')));
       return;
     }
 
@@ -396,6 +525,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).extension<LumiColors>()!;
     final ws = context.watch<WsService>();
+    final settings = context.watch<AppSettings>();
     final screenWidth = MediaQuery.of(context).size.width;
     final isCompact = screenWidth < 920;
 
@@ -434,6 +564,12 @@ class _ChatScreenState extends State<ChatScreen> {
             onDeleteMessage: (msgId) {
               unawaited(_confirmDeleteMessages(ws, {msgId}));
             },
+            enableAiVoiceOutput: settings.enableAiVoiceOutput,
+            ttsReadyMessageIds: _ttsReadyMessageIds,
+            ttsGeneratingMessageIds: _ttsGeneratingMessageIds,
+            playingTtsMessageId: ws.playingTtsTurnId,
+            isTtsPlaying: ws.isTtsPlaying,
+            onReadAloudTap: (msg) => _onReadAloudTap(ws, msg),
           ),
         ),
         Divider(height: 1, color: colors.divider),
@@ -1525,8 +1661,9 @@ class _SettingsDialog extends StatelessWidget {
                                 )
                                 .toList(),
                             onChanged: (val) {
-                              if (val != null)
+                              if (val != null) {
                                 settings.setWindowCloseAction(val);
+                              }
                             },
                           ),
                         ),
@@ -1653,7 +1790,93 @@ class _SettingsDialog extends StatelessWidget {
                         indent: 48,
                       ),
 
-                      // 6. 打开日志目录
+                      // 6. AI 语音输出
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.record_voice_over_outlined,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          'AI 回复语音转换',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          settings.enableAiVoiceOutput
+                              ? '已开启：回复将先显示文字，再后台生成语音'
+                              : '已关闭：保持纯文字聊天',
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Transform.scale(
+                          scale: 0.8,
+                          child: Switch(
+                            value: settings.enableAiVoiceOutput,
+                            onChanged: settings.setEnableAiVoiceOutput,
+                            activeThumbColor: colors.accent,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ),
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
+                      ),
+
+                      // 7. 语音配置
+                      ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 8,
+                        ),
+                        leading: Icon(
+                          Icons.tune,
+                          color: colors.subtext,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '语音配置',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          settings.ttsVoiceId.isEmpty
+                              ? '未设置 voice_id'
+                              : settings.ttsVoiceId,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: colors.subtext, fontSize: 12),
+                        ),
+                        trailing: Icon(
+                          Icons.open_in_new,
+                          color: colors.subtext,
+                          size: 16,
+                        ),
+                        onTap: () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (_) =>
+                                const VoiceSettingsScreen(showAsDialog: true),
+                          );
+                        },
+                      ),
+                      Divider(
+                        height: 1,
+                        color: colors.divider.withValues(alpha: 0.2),
+                        indent: 48,
+                      ),
+
+                      // 8. 打开日志目录
                       ListTile(
                         contentPadding: const EdgeInsets.only(
                           left: 16,
@@ -1690,7 +1913,7 @@ class _SettingsDialog extends StatelessWidget {
                         indent: 48,
                       ),
 
-                      // 7. Host 地址
+                      // 9. Host 地址
                       ListTile(
                         contentPadding: const EdgeInsets.only(
                           left: 16,
@@ -1727,7 +1950,7 @@ class _SettingsDialog extends StatelessWidget {
                         indent: 48,
                       ),
 
-                      // 8. 接入密钥
+                      // 10. 接入密钥
                       ListTile(
                         contentPadding: const EdgeInsets.only(
                           left: 16,
@@ -1971,6 +2194,12 @@ class _MessageList extends StatefulWidget {
   final ValueChanged<Set<String>> onSetSelection;
   final VoidCallback onEnterSelectionMode;
   final Function(String) onDeleteMessage;
+  final bool enableAiVoiceOutput;
+  final Set<String> ttsReadyMessageIds;
+  final Set<String> ttsGeneratingMessageIds;
+  final String? playingTtsMessageId;
+  final bool isTtsPlaying;
+  final ValueChanged<ChatMessage> onReadAloudTap;
 
   const _MessageList({
     required this.messages,
@@ -1983,6 +2212,12 @@ class _MessageList extends StatefulWidget {
     required this.onSetSelection,
     required this.onEnterSelectionMode,
     required this.onDeleteMessage,
+    required this.enableAiVoiceOutput,
+    required this.ttsReadyMessageIds,
+    required this.ttsGeneratingMessageIds,
+    required this.playingTtsMessageId,
+    required this.isTtsPlaying,
+    required this.onReadAloudTap,
   });
 
   @override
@@ -2089,6 +2324,12 @@ class _MessageListState extends State<_MessageList> {
           onBubbleRectChanged: (rect) {
             _messageBubbleRects[msg.id] = rect;
           },
+          enableAiVoiceOutput: widget.enableAiVoiceOutput,
+          isTtsReady: widget.ttsReadyMessageIds.contains(msg.id),
+          isTtsGenerating: widget.ttsGeneratingMessageIds.contains(msg.id),
+          isTtsPlaying:
+              widget.isTtsPlaying && widget.playingTtsMessageId == msg.id,
+          onReadAloudTap: () => widget.onReadAloudTap(msg),
         );
       },
     );
@@ -2123,7 +2364,8 @@ class _MessageListState extends State<_MessageList> {
 
               final copyItem = selectableRegionState.contextMenuButtonItems
                   .firstWhere((b) => b.type == ContextMenuButtonType.copy);
-              final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+              final isMobile =
+                  !kIsWeb && (Platform.isAndroid || Platform.isIOS);
               final targetMessageId = _activeTextActionMessageId;
 
               return AdaptiveTextSelectionToolbar.buttonItems(
@@ -2236,6 +2478,11 @@ class _BubbleItem extends StatefulWidget {
   final VoidCallback onActivateForTextActions;
   final ValueChanged<Rect> onRowRectChanged;
   final ValueChanged<Rect> onBubbleRectChanged;
+  final bool enableAiVoiceOutput;
+  final bool isTtsReady;
+  final bool isTtsGenerating;
+  final bool isTtsPlaying;
+  final VoidCallback onReadAloudTap;
 
   const _BubbleItem({
     super.key,
@@ -2250,6 +2497,11 @@ class _BubbleItem extends StatefulWidget {
     required this.onActivateForTextActions,
     required this.onRowRectChanged,
     required this.onBubbleRectChanged,
+    required this.enableAiVoiceOutput,
+    required this.isTtsReady,
+    required this.isTtsGenerating,
+    required this.isTtsPlaying,
+    required this.onReadAloudTap,
   });
 
   @override
@@ -2272,8 +2524,7 @@ class _BubbleItemState extends State<_BubbleItem> {
     final bubbleCtx = _bubbleContentKey.currentContext;
     final bubbleBox = bubbleCtx?.findRenderObject() as RenderBox?;
     if (bubbleBox != null && bubbleBox.hasSize) {
-      final bubbleRect =
-          bubbleBox.localToGlobal(Offset.zero) & bubbleBox.size;
+      final bubbleRect = bubbleBox.localToGlobal(Offset.zero) & bubbleBox.size;
       widget.onBubbleRectChanged(bubbleRect);
     }
   }
@@ -2798,6 +3049,41 @@ class _BubbleItemState extends State<_BubbleItem> {
                           child: _buildBubbleContent(textColor),
                         ),
                       ),
+                      if (!isMe &&
+                          widget.enableAiVoiceOutput &&
+                          !widget.msg.isTyping)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 6, bottom: 2),
+                          child: IconButton(
+                            tooltip: widget.isTtsPlaying
+                                ? '停止朗读'
+                                : widget.isTtsGenerating
+                                ? '语音生成中'
+                                : widget.isTtsReady
+                                ? '朗读消息'
+                                : '生成并朗读',
+                            onPressed: widget.isTtsGenerating
+                                ? null
+                                : widget.onReadAloudTap,
+                            icon: Icon(
+                              widget.isTtsPlaying
+                                  ? Icons.stop_circle_outlined
+                                  : widget.isTtsGenerating
+                                  ? Icons.hourglass_top_rounded
+                                  : widget.isTtsReady
+                                  ? Icons.volume_up_rounded
+                                  : Icons.volume_up_outlined,
+                              size: 18,
+                              color: widget.colors.subtext,
+                            ),
+                            style: IconButton.styleFrom(
+                              minimumSize: const Size(28, 28),
+                              padding: EdgeInsets.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              backgroundColor: widget.colors.inputBg,
+                            ),
+                          ),
+                        ),
                       if (isMe) const SizedBox(width: 8),
                       if (widget.isSelectionMode && isMe)
                         Padding(

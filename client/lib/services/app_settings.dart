@@ -22,8 +22,8 @@ const Map<ConnectionMode, String> kConnectionModeLabels = {
 };
 
 class AppSettings extends ChangeNotifier {
-    final Completer<void> _loadedCompleter = Completer<void>();
-    bool _isLoaded = false;
+  final Completer<void> _loadedCompleter = Completer<void>();
+  bool _isLoaded = false;
   static const String _fontKeyStorage = 'app.font_key';
   static const String _closeAstrBotOnExitStorage = 'app.close_astrbot_on_exit';
   static const String _windowCloseActionStorage = 'app.window_close_action';
@@ -31,6 +31,9 @@ class AppSettings extends ChangeNotifier {
   static const String _connectionModeStorage = 'app.connection_mode';
   static const String _askConnectionModeOnLaunchStorage =
       'app.ask_connection_mode_on_launch';
+  static const String _enableAiVoiceOutputStorage =
+      'app.enable_ai_voice_output';
+  static const String _ttsVoiceIdStorage = 'app.tts_voice_id';
 
   String _fontFamily = 'MiSans'; // 默认使用 MiSans
   bool _closeAstrBotOnExit = false;
@@ -38,6 +41,8 @@ class AppSettings extends ChangeNotifier {
   bool _remoteClientMode = false;
   ConnectionMode _connectionMode = ConnectionMode.localOrUsb;
   bool _askConnectionModeOnLaunch = true;
+  bool _enableAiVoiceOutput = false;
+  String _ttsVoiceId = '';
 
   AppSettings() {
     _load();
@@ -54,6 +59,8 @@ class AppSettings extends ChangeNotifier {
   bool get remoteClientMode => _remoteClientMode;
   ConnectionMode get connectionMode => _connectionMode;
   bool get askConnectionModeOnLaunch => _askConnectionModeOnLaunch;
+  bool get enableAiVoiceOutput => _enableAiVoiceOutput;
+  String get ttsVoiceId => _ttsVoiceId;
   bool get isLoaded => _isLoaded;
   Future<void> get loaded => _loadedCompleter.future;
 
@@ -99,6 +106,21 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
+  void setEnableAiVoiceOutput(bool value) {
+    if (_enableAiVoiceOutput == value) return;
+    _enableAiVoiceOutput = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setTtsVoiceId(String value) {
+    final normalized = value.trim();
+    if (_ttsVoiceId == normalized) return;
+    _ttsVoiceId = normalized;
+    notifyListeners();
+    _save();
+  }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     _fontFamily = prefs.getString(_fontKeyStorage) ?? 'MiSans';
@@ -126,6 +148,9 @@ class AppSettings extends ChangeNotifier {
 
     _askConnectionModeOnLaunch =
       prefs.getBool(_askConnectionModeOnLaunchStorage) ?? true;
+    _enableAiVoiceOutput =
+      prefs.getBool(_enableAiVoiceOutputStorage) ?? false;
+    _ttsVoiceId = prefs.getString(_ttsVoiceIdStorage) ?? '';
     _isLoaded = true;
     if (!_loadedCompleter.isCompleted) {
       _loadedCompleter.complete();
@@ -155,5 +180,7 @@ class AppSettings extends ChangeNotifier {
       _askConnectionModeOnLaunchStorage,
       _askConnectionModeOnLaunch,
     );
+    await prefs.setBool(_enableAiVoiceOutputStorage, _enableAiVoiceOutput);
+    await prefs.setString(_ttsVoiceIdStorage, _ttsVoiceId);
   }
 }

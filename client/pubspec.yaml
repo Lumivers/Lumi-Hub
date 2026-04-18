@@ -40,6 +40,8 @@ dependencies:
   tray_manager: ^0.5.2
   file_picker: ^10.1.9
   crypto: ^3.0.6
+  just_audio: ^0.9.46
+  just_audio_windows: ^0.2.3
 
 dev_dependencies:
   flutter_test:

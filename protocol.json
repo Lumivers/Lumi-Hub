@@ -63,6 +63,21 @@
       "FILE_UPLOAD_ACK",
       "FILE_UPLOAD_ERROR"
     ],
+    "speech": [
+      "VOICE_TTS_REQUEST",
+      "TTS_STREAM_START",
+      "TTS_STREAM_CHUNK",
+      "TTS_STREAM_END",
+      "VOICE_INTERRUPT",
+      "VOICE_INTERRUPT_ACK",
+      "TTS_CANCEL"
+    ],
+    "speech_config": [
+      "VOICE_CONFIG_GET",
+      "VOICE_CONFIG_RESPONSE",
+      "VOICE_CONFIG_SET",
+      "VOICE_CONFIG_SET_RESPONSE"
+    ],
     "system": [
       "ERROR_ALERT"
     ]
@@ -175,6 +190,38 @@
               }
             }
           }
+        }
+      }
+    },
+    "VOICE_CONFIG_SET": {
+      "message_id": "voice-cfg-001",
+      "type": "VOICE_CONFIG_SET",
+      "source": "client",
+      "target": "host",
+      "timestamp": 1700000030000,
+      "payload": {
+        "config": {
+          "provider": "dashscope",
+          "voice_id": "longxiaochun_v2",
+          "api_key": "<dashscope_api_key>",
+          "clear_api_key": false
+        }
+      }
+    },
+    "VOICE_CONFIG_RESPONSE": {
+      "message_id": "voice-cfg-002",
+      "type": "VOICE_CONFIG_RESPONSE",
+      "source": "host",
+      "target": "client",
+      "timestamp": 1700000030200,
+      "payload": {
+        "status": "success",
+        "config": {
+          "provider": "dashscope",
+          "voice_id": "longxiaochun_v2",
+          "api_key_configured": true,
+          "api_key_source": "runtime",
+          "api_key_masked": "sk-1a2b********9x0y"
         }
       }
     }

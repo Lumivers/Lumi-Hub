@@ -33,12 +33,20 @@ from .ws_server import LumiWSServer
 from .lumi_event import LumiMessageEvent
 from .database.manager import DatabaseManager
 from .mcp_manager import LumiMCPManager
+from .voice_extensions import (
+    DashScopeTTSProvider,
+    SpeechSessionController,
+    TTSRequest,
+    VoiceExtensionRegistry,
+    VoiceProviderError,
+    build_style_plan,
+    compile_ssml,
+    plan_style_for_text,
+)
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import register, Context
-import time
-import uuid
 
 # 全局共享状态，用于跨类传递实例
 _lumi_shared_state = {}
@@ -333,6 +341,9 @@ class LumiHubAdapter(Platform):
         data_dir = os.path.join(project_root, "data")
         self.data_dir = data_dir
         self.db = DatabaseManager(data_dir=data_dir)
+        self.voice_config_path = os.path.join(data_dir, "voice_config.json")
+        self._voice_config_cache = self._load_voice_config()
+        self._dashscope_provider: DashScopeTTSProvider | None = None
 
         # 上传缓存目录与会话状态
         self.upload_root_dir = os.path.join(data_dir, "uploads")
@@ -353,6 +364,10 @@ class LumiHubAdapter(Platform):
         
         # 记录已验证的 websocket session -> user_id
         self.active_sessions: dict[str, int] = {}
+        self.voice_registry = VoiceExtensionRegistry()
+        self.speech_sessions = SpeechSessionController()
+        self._voice_turn_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._setup_voice_extensions()
 
         self.metadata = PlatformMetadata(
             name="lumi_hub",
@@ -364,6 +379,55 @@ class LumiHubAdapter(Platform):
         )
 
         self._shutdown_event = asyncio.Event()
+
+    def _setup_voice_extensions(self) -> None:
+        provider_name = str(os.environ.get("LUMI_VOICE_PROVIDER", "dashscope")).strip().lower()
+        if provider_name != "dashscope":
+            logger.warning("[Lumi-Hub] Voice provider '%s' is not supported yet", provider_name)
+            return
+
+        env_default_voice = str(os.environ.get("LUMI_DASHSCOPE_VOICE_ID", "")).strip()
+        cached_default_voice = str(self._voice_config_cache.get("dashscope_voice_id", "")).strip()
+        default_voice = env_default_voice or cached_default_voice
+
+        provider = DashScopeTTSProvider(
+            model=str(os.environ.get("LUMI_DASHSCOPE_MODEL", "cosyvoice-v3.5-plus")).strip(),
+            default_voice=default_voice,
+            websocket_url=str(os.environ.get("LUMI_DASHSCOPE_WS_URL", "")).strip(),
+            http_url=str(os.environ.get("LUMI_DASHSCOPE_HTTP_URL", "")).strip(),
+        )
+        cached_api_key = str(self._voice_config_cache.get("dashscope_api_key", "")).strip()
+        if cached_api_key:
+            provider.set_api_key(cached_api_key)
+
+        self.voice_registry.register_tts("dashscope", provider)
+        self.voice_registry.set_default_tts("dashscope")
+        self._dashscope_provider = provider
+
+        if not provider.has_api_key():
+            logger.warning("[Lumi-Hub] DASHSCOPE_API_KEY is empty. Voice synthesis requests will fail until configured.")
+
+        logger.info("[Lumi-Hub] Voice extension registered: dashscope")
+
+    def _load_voice_config(self) -> dict[str, Any]:
+        if not os.path.exists(self.voice_config_path):
+            return {}
+        try:
+            with open(self.voice_config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            return {}
+        except Exception as e:
+            logger.warning(f"[Lumi-Hub] Failed to load voice config: {e}")
+            return {}
+
+    def _save_voice_config(self) -> None:
+        try:
+            with open(self.voice_config_path, "w", encoding="utf-8") as f:
+                json.dump(self._voice_config_cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[Lumi-Hub] Failed to save voice config: {e}")
 
     def run(self) -> Coroutine[Any, Any, None]:
         """返回平台运行协程，AstrBot 会将其作为 asyncio.Task 启动。"""
@@ -385,6 +449,12 @@ class LumiHubAdapter(Platform):
     async def terminate(self) -> None:
         """关闭平台适配器。"""
         logger.info("[Lumi-Hub] 平台适配器关闭中...")
+
+        for task in list(self._voice_turn_tasks.values()):
+            if not task.done():
+                task.cancel()
+        self._voice_turn_tasks.clear()
+
         self._shutdown_event.set()
         await self.ws_server.stop()
         
@@ -482,12 +552,153 @@ class LumiHubAdapter(Platform):
             await self._handle_file_upload_chunk(message, ws_session_id)
         elif msg_type == "FILE_UPLOAD_COMPLETE":
             await self._handle_file_upload_complete(message, ws_session_id)
+        elif msg_type == "VOICE_CONFIG_GET":
+            await self._handle_voice_config_get(message, ws_session_id)
+        elif msg_type == "VOICE_CONFIG_SET":
+            await self._handle_voice_config_set(message, ws_session_id)
+        elif msg_type == "VOICE_TTS_REQUEST":
+            self._spawn_voice_tts_task(message, ws_session_id)
+        elif msg_type in ("VOICE_INTERRUPT", "TTS_CANCEL"):
+            await self._handle_voice_interrupt(message, ws_session_id)
         else:
             logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
+
+    async def _handle_voice_config_get(self, message: dict, ws_session_id: str) -> None:
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        user_id = self.active_sessions.get(ws_session_id)
+        if not user_id:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "VOICE_CONFIG_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "status": "error",
+                    "message": "请先登录",
+                },
+            })
+            return
+
+        provider = self._dashscope_provider
+        if provider is None:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "VOICE_CONFIG_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "status": "error",
+                    "message": "Voice provider is not initialized",
+                },
+            })
+            return
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "VOICE_CONFIG_RESPONSE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "status": "success",
+                "config": {
+                    "provider": "dashscope",
+                    "voice_id": provider.default_voice,
+                    "api_key_configured": provider.has_api_key(),
+                    "api_key_source": provider.get_api_key_source(),
+                    "api_key_masked": provider.get_masked_api_key(),
+                },
+            },
+        })
+
+    async def _handle_voice_config_set(self, message: dict, ws_session_id: str) -> None:
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        user_id = self.active_sessions.get(ws_session_id)
+        if not user_id:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "VOICE_CONFIG_SET_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "status": "error",
+                    "message": "请先登录",
+                },
+            })
+            return
+
+        provider = self._dashscope_provider
+        if provider is None:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "VOICE_CONFIG_SET_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "status": "error",
+                    "message": "Voice provider is not initialized",
+                },
+            })
+            return
+
+        payload = message.get("payload", {})
+        config = payload.get("config", {}) if isinstance(payload, dict) else {}
+        if not isinstance(config, dict):
+            config = {}
+
+        voice_id = str(config.get("voice_id", "") or "").strip()
+        api_key = str(config.get("api_key", "") or "").strip()
+        clear_api_key = bool(config.get("clear_api_key", False))
+
+        if voice_id:
+            provider.default_voice = voice_id
+            self._voice_config_cache["dashscope_voice_id"] = voice_id
+
+        if clear_api_key:
+            provider.set_api_key("")
+            self._voice_config_cache.pop("dashscope_api_key", None)
+        elif api_key:
+            provider.set_api_key(api_key)
+            self._voice_config_cache["dashscope_api_key"] = api_key
+
+        self._save_voice_config()
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "VOICE_CONFIG_SET_RESPONSE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "status": "success",
+                "config": {
+                    "provider": "dashscope",
+                    "voice_id": provider.default_voice,
+                    "api_key_configured": provider.has_api_key(),
+                    "api_key_source": provider.get_api_key_source(),
+                    "api_key_masked": provider.get_masked_api_key(),
+                },
+            },
+        })
 
     async def _handle_ws_disconnect(self, ws_session_id: str) -> None:
         """WebSocket 断开后的资源清理。"""
         self.active_sessions.pop(ws_session_id, None)
+        active_turn = await self.speech_sessions.clear_session(ws_session_id)
+        if active_turn:
+            await self.voice_registry.cancel_all(ws_session_id, active_turn)
+
+        stale_voice_keys = [
+            key for key in self._voice_turn_tasks.keys() if key[0] == ws_session_id
+        ]
+        for key in stale_voice_keys:
+            task = self._voice_turn_tasks.pop(key, None)
+            if task and not task.done():
+                task.cancel()
 
         stale_upload_ids = [
             upload_id
@@ -496,6 +707,244 @@ class LumiHubAdapter(Platform):
         ]
         for upload_id in stale_upload_ids:
             self._discard_upload_session(upload_id)
+
+    def _spawn_voice_tts_task(self, message: dict, ws_session_id: str) -> None:
+        task = asyncio.create_task(self._handle_voice_tts_request(message, ws_session_id))
+        task.add_done_callback(self._track_voice_tts_task)
+
+    def _track_voice_tts_task(self, task: asyncio.Task) -> None:
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            logger.error(f"[Lumi-Hub] VOICE_TTS_REQUEST task failed: {exc}")
+
+    async def _handle_voice_interrupt(self, message: dict, ws_session_id: str) -> None:
+        payload = message.get("payload", {})
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        turn_id = str(payload.get("turn_id", "") or "").strip()
+
+        if turn_id:
+            await self.speech_sessions.cancel_turn(ws_session_id, turn_id)
+        else:
+            turn_id = await self.speech_sessions.cancel_active_turn(ws_session_id) or ""
+
+        if turn_id:
+            await self.voice_registry.cancel_all(ws_session_id, turn_id)
+            running_task = self._voice_turn_tasks.pop((ws_session_id, turn_id), None)
+            if running_task and not running_task.done():
+                running_task.cancel()
+            status = "cancelled"
+        else:
+            status = "no_active_turn"
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "VOICE_INTERRUPT_ACK",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "turn_id": turn_id,
+                "status": status,
+            },
+        })
+
+    async def _handle_voice_tts_request(self, message: dict, ws_session_id: str) -> None:
+        payload = message.get("payload", {})
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        user_id = self.active_sessions.get(ws_session_id)
+        if not user_id:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "ERROR_ALERT",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "error_code": "UNAUTHORIZED",
+                    "detail": "Please login first",
+                },
+            })
+            return
+
+        text = str(payload.get("text", "") or "")
+        turn_id = str(payload.get("turn_id", "") or str(uuid.uuid4())[:8])
+        provider_name = str(payload.get("provider", "") or "").strip() or None
+        voice_id = str(payload.get("voice_id", "") or "").strip()
+        raw_use_ssml = payload.get("use_ssml", True)
+        if isinstance(raw_use_ssml, str):
+            use_ssml = raw_use_ssml.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            use_ssml = bool(raw_use_ssml)
+        try:
+            chunk_bytes = int(payload.get("chunk_bytes", 32768) or 32768)
+        except (TypeError, ValueError):
+            chunk_bytes = 32768
+        raw_style_plan = payload.get("style_plan")
+        raw_auto_style = payload.get("auto_style", True)
+        if isinstance(raw_auto_style, str):
+            auto_style = raw_auto_style.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            auto_style = bool(raw_auto_style)
+        if isinstance(raw_style_plan, dict):
+            style_plan = build_style_plan(raw_style_plan)
+        elif auto_style:
+            style_plan = plan_style_for_text(text)
+        else:
+            style_plan = build_style_plan(None)
+        custom_ssml = str(payload.get("ssml", "") or "").strip()
+        if custom_ssml:
+            use_ssml = True
+
+        provider = self.voice_registry.get_tts(provider_name)
+        if not provider:
+            await self._send_tts_stream_end(
+                ws_session_id,
+                msg_id,
+                turn_id,
+                status="error",
+                detail="No TTS provider registered",
+            )
+            return
+
+        if not text.strip() and not custom_ssml:
+            await self._send_tts_stream_end(
+                ws_session_id,
+                msg_id,
+                turn_id,
+                status="error",
+                detail="Text is empty",
+            )
+            return
+
+        if use_ssml and not provider.supports_ssml:
+            await self._send_tts_stream_end(
+                ws_session_id,
+                msg_id,
+                turn_id,
+                status="error",
+                detail=f"Provider '{provider.provider_name}' does not support SSML",
+            )
+            return
+
+        replaced_turn = await self.speech_sessions.activate_turn(ws_session_id, turn_id)
+        if replaced_turn:
+            await self.voice_registry.cancel_all(ws_session_id, replaced_turn)
+            old_task = self._voice_turn_tasks.pop((ws_session_id, replaced_turn), None)
+            if old_task and old_task is not asyncio.current_task() and not old_task.done():
+                old_task.cancel()
+
+        current_task = asyncio.current_task()
+        if current_task:
+            self._voice_turn_tasks[(ws_session_id, turn_id)] = current_task
+
+        ssml_text = custom_ssml
+        if use_ssml and not ssml_text:
+            ssml_text = compile_ssml(text=text, style_plan=style_plan, voice_id=voice_id)
+
+        request = TTSRequest(
+            ws_session_id=ws_session_id,
+            turn_id=turn_id,
+            request_id=msg_id,
+            text=text,
+            voice_id=voice_id,
+            use_ssml=use_ssml,
+            ssml=ssml_text,
+            style_plan=style_plan,
+            chunk_bytes=chunk_bytes,
+        )
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "TTS_STREAM_START",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "turn_id": turn_id,
+                "provider": provider.provider_name,
+                "format": provider.output_format,
+                "sample_rate": provider.sample_rate,
+                "status": "started",
+            },
+        })
+
+        seq_count = 0
+        status = "success"
+        detail = ""
+        try:
+            async for chunk in provider.synthesize_stream(request):
+                if not await self.speech_sessions.is_active(ws_session_id, turn_id):
+                    status = "interrupted"
+                    detail = "Turn interrupted"
+                    break
+
+                encoded = base64.b64encode(chunk.data).decode("ascii")
+                await self.ws_server.send_to_client(ws_session_id, {
+                    "message_id": msg_id,
+                    "type": "TTS_STREAM_CHUNK",
+                    "source": "host",
+                    "target": "client",
+                    "timestamp": int(time.time() * 1000),
+                    "payload": {
+                        "turn_id": turn_id,
+                        "seq": chunk.seq,
+                        "audio_base64": encoded,
+                        "format": provider.output_format,
+                        "sample_rate": provider.sample_rate,
+                    },
+                })
+                seq_count = chunk.seq + 1
+
+            if status == "success" and not await self.speech_sessions.is_active(ws_session_id, turn_id):
+                status = "interrupted"
+                detail = "Turn interrupted"
+        except VoiceProviderError as exc:
+            status = "error"
+            detail = str(exc)
+        except asyncio.CancelledError:
+            status = "interrupted"
+            detail = "Voice task cancelled"
+        except Exception as exc:
+            status = "error"
+            detail = str(exc)
+            logger.error(f"[Lumi-Hub] Voice synthesis failed: {exc}")
+        finally:
+            await self._send_tts_stream_end(
+                ws_session_id,
+                msg_id,
+                turn_id,
+                status=status,
+                detail=detail,
+                seq_count=seq_count,
+            )
+            await self.speech_sessions.finish_turn(ws_session_id, turn_id)
+            self._voice_turn_tasks.pop((ws_session_id, turn_id), None)
+
+    async def _send_tts_stream_end(
+        self,
+        ws_session_id: str,
+        message_id: str,
+        turn_id: str,
+        status: str,
+        detail: str,
+        seq_count: int = 0,
+    ) -> None:
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": message_id,
+            "type": "TTS_STREAM_END",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "turn_id": turn_id,
+                "status": status,
+                "detail": detail,
+                "seq_count": seq_count,
+            },
+        })
 
     def _normalize_mime(self, file_name: str, mime_type: str) -> str:
         guessed = mimetypes.guess_type(file_name)[0]
