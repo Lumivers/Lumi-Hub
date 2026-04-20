@@ -2,7 +2,6 @@ part of 'ws_service.dart';
 
 extension WsServiceTtsPart on WsService {
   // 检查某一轮 turn 是否已有可播放音频（内存索引 + 磁盘恢复）。
-
   bool hasTtsAudio(String turnId) {
     final normalized = turnId.trim();
     if (normalized.isEmpty) return false;
@@ -66,6 +65,29 @@ extension WsServiceTtsPart on WsService {
 
   void _initTtsPlayer() {
     if (kIsWeb) return;
+
+    if (Platform.isWindows) {
+      _ttsWindowsPlayer ??= ap.AudioPlayer();
+      _ttsWindowsPlayerStateSub?.cancel();
+      _ttsWindowsPlayerStateSub = _ttsWindowsPlayer!.onPlayerStateChanged
+          .listen((state) {
+            final completed = state == ap.PlayerState.completed;
+            final nextPlaying = state == ap.PlayerState.playing;
+            if (_isTtsPlaying != nextPlaying) {
+              _isTtsPlaying = nextPlaying;
+              if (!nextPlaying && completed) {
+                _playingTtsTurnId = null;
+              }
+              _notifyStateChanged();
+            }
+            if (completed && _playingTtsTurnId != null) {
+              _playingTtsTurnId = null;
+              _notifyStateChanged();
+            }
+          });
+      return;
+    }
+
     _ttsPlayer = AudioPlayer();
     _ttsPlayerStateSub = _ttsPlayer!.playerStateStream.listen((state) {
       final isPlaying = state.playing;
@@ -83,6 +105,75 @@ extension WsServiceTtsPart on WsService {
         _notifyStateChanged();
       }
     });
+  }
+
+  Future<void> _recreateTtsPlayer() async {
+    // 播放器异常时重建实例，再尝试恢复播放。
+    if (Platform.isWindows) {
+      await _ttsWindowsPlayerStateSub?.cancel();
+      _ttsWindowsPlayerStateSub = null;
+
+      final oldWindowsPlayer = _ttsWindowsPlayer;
+      _ttsWindowsPlayer = null;
+      if (oldWindowsPlayer != null) {
+        try {
+          await oldWindowsPlayer.dispose();
+        } catch (e) {
+          debugPrint('[WS] 销毁旧 Windows TTS 播放器失败: $e');
+        }
+      }
+
+      _initTtsPlayer();
+      return;
+    }
+
+    await _ttsPlayerStateSub?.cancel();
+    _ttsPlayerStateSub = null;
+
+    final oldPlayer = _ttsPlayer;
+    _ttsPlayer = null;
+    if (oldPlayer != null) {
+      try {
+        await oldPlayer.dispose();
+      } catch (e) {
+        debugPrint('[WS] 销毁旧 TTS 播放器失败: $e');
+      }
+    }
+
+    _initTtsPlayer();
+  }
+
+  Future<void> _playFileOnce({
+    required String turnId,
+    required String path,
+  }) async {
+    if (Platform.isWindows) {
+      final windowsPlayer = _ttsWindowsPlayer;
+      if (windowsPlayer == null) {
+        throw Exception('语音播放器未初始化');
+      }
+
+      await windowsPlayer.stop();
+      _playingTtsTurnId = turnId;
+      _isTtsPlaying = false;
+      _notifyStateChanged();
+
+      await windowsPlayer.play(ap.DeviceFileSource(path));
+      return;
+    }
+
+    final player = _ttsPlayer;
+    if (player == null) {
+      throw Exception('语音播放器未初始化');
+    }
+
+    await player.stop();
+    _playingTtsTurnId = turnId;
+    _isTtsPlaying = false;
+    _notifyStateChanged();
+
+    await player.setFilePath(path);
+    await player.play();
   }
 
   void _handleTtsStreamStart(Map<String, dynamic> data) {
@@ -169,8 +260,19 @@ extension WsServiceTtsPart on WsService {
 
   Future<void> playTtsAudio(String turnId) async {
     if (kIsWeb) return;
-    final player = _ttsPlayer;
-    if (player == null) return;
+
+    if (Platform.isWindows) {
+      if (_ttsWindowsPlayer == null) {
+        _initTtsPlayer();
+      }
+      if (_ttsWindowsPlayer == null) return;
+    } else {
+      if (_ttsPlayer == null) {
+        _initTtsPlayer();
+      }
+      if (_ttsPlayer == null) return;
+    }
+
     if (_ttsOperationLocked) return;
 
     final path = _ttsAudioFiles[turnId];
@@ -199,13 +301,13 @@ extension WsServiceTtsPart on WsService {
         return;
       }
 
-      await player.stop();
-      _playingTtsTurnId = turnId;
-      _isTtsPlaying = false;
-      _notifyStateChanged();
-
-      await player.setFilePath(path);
-      await player.play();
+      try {
+        await _playFileOnce(turnId: turnId, path: path);
+      } catch (firstError) {
+        debugPrint('[WS] 首次播放失败，尝试重建播放器后重试: $firstError');
+        await _recreateTtsPlayer();
+        await _playFileOnce(turnId: turnId, path: path);
+      }
     } catch (e) {
       _isTtsPlaying = false;
       _playingTtsTurnId = null;
@@ -217,6 +319,17 @@ extension WsServiceTtsPart on WsService {
   }
 
   Future<void> stopTtsAudio() async {
+    if (Platform.isWindows) {
+      final windowsPlayer = _ttsWindowsPlayer;
+      if (windowsPlayer == null) return;
+
+      await windowsPlayer.stop();
+      _isTtsPlaying = false;
+      _playingTtsTurnId = null;
+      _notifyStateChanged();
+      return;
+    }
+
     final player = _ttsPlayer;
     if (player == null) return;
 

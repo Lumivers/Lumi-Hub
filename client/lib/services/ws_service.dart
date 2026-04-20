@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:audioplayers/audioplayers.dart' as ap;
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -110,6 +111,8 @@ class WsService extends ChangeNotifier {
   final Set<String> _ttsGeneratingTurns = <String>{};
   AudioPlayer? _ttsPlayer;
   StreamSubscription<PlayerState>? _ttsPlayerStateSub;
+  ap.AudioPlayer? _ttsWindowsPlayer;
+  StreamSubscription<ap.PlayerState>? _ttsWindowsPlayerStateSub;
   bool _isTtsPlaying = false;
   String? _playingTtsTurnId;
   bool _ttsOperationLocked = false;
@@ -951,6 +954,14 @@ class WsService extends ChangeNotifier {
     _voiceEventController.close();
     _personaController.close();
     _ttsPlayerStateSub?.cancel();
+    _ttsWindowsPlayerStateSub?.cancel();
+
+    final windowsPlayer = _ttsWindowsPlayer;
+    _ttsWindowsPlayer = null;
+    if (windowsPlayer != null) {
+      unawaited(windowsPlayer.dispose());
+    }
+
     _ttsPlayer?.dispose();
     disconnect();
     super.dispose();

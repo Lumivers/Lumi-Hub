@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  audioplayers_windows
   just_audio_windows
   screen_retriever_windows
   tray_manager
