@@ -277,6 +277,35 @@ class _SidebarState extends State<_Sidebar> {
             ),
           ),
 
+          // 资源包入口（解耦后独立页面）
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+            child: ListTile(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              hoverColor: colors.accent.withValues(alpha: 0.1),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              leading: Icon(
+                Icons.archive_outlined,
+                color: colors.subtext,
+                size: 20,
+              ),
+              title: Text(
+                '可扩展资源包',
+                style: TextStyle(color: colors.subtext, fontSize: 13),
+              ),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ResourcePackageScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+
           // 设置入口
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),

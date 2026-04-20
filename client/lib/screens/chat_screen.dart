@@ -20,6 +20,7 @@ import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'components/approval_dialog.dart';
 import 'mcp_settings_screen.dart';
+import 'resource_package_screen.dart';
 import 'voice_settings_screen.dart';
 
 part 'chat_screen_sidebar.dart';
