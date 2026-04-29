@@ -173,13 +173,24 @@ class _SidebarState extends State<_Sidebar> {
             height: 56,
             padding: const EdgeInsets.symmetric(horizontal: 16),
             alignment: Alignment.centerLeft,
-            child: Text(
-              'Lumi Hub',
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Lumi Hub',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.auto_awesome, color: colors.accent),
+                  tooltip: '打开 Firefly',
+                  onPressed: () => UnityLaunchScreen.open(context),
+                ),
+              ],
             ),
           ),
           Divider(height: 1, color: colors.divider),

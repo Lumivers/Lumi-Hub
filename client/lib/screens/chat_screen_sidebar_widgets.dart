@@ -1,3 +1,4 @@
+// ignore_for_file: deprecated_member_use
 part of 'chat_screen.dart';
 
 // 侧栏人格条目：展示状态、支持拖拽和快捷菜单。
@@ -983,6 +984,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onCancelSelection;
   final VoidCallback onDeleteSelected;
   final VoidCallback? onOpenSidebar;
+  final VoidCallback? onLaunchUnity;
 
   const _TopBar({
     required this.colors,
@@ -993,6 +995,7 @@ class _TopBar extends StatelessWidget {
     required this.onCancelSelection,
     required this.onDeleteSelected,
     this.onOpenSidebar,
+    this.onLaunchUnity,
   });
 
   @override
@@ -1104,8 +1107,7 @@ class _TopBar extends StatelessWidget {
                 Text(
                   activePersonaId.isNotEmpty ? activePersonaId : '未选择人格',
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                     color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
@@ -1128,6 +1130,14 @@ class _TopBar extends StatelessWidget {
                 ),
               ],
             ),
+            if (onLaunchUnity != null) ...[
+              const Spacer(),
+              IconButton(
+                icon: Icon(Icons.auto_awesome, color: colors.accent),
+                onPressed: onLaunchUnity,
+                tooltip: '打开 Firefly',
+              ),
+            ],
           ],
         ),
       ),

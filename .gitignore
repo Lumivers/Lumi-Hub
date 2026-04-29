@@ -36,3 +36,5 @@ sync.py
 !readme.md
 
 /voiceclone
+
+/host/tools/output_audio
