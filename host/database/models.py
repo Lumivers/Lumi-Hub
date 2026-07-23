@@ -65,6 +65,27 @@ class Attachment(Base):
     def __repr__(self):
         return f"<Attachment(name='{self.file_name}', mime='{self.mime_type}', size={self.size_bytes})>"
 
+
+class Memory(Base):
+    """用户记忆表 — Lumi-Hub 2.0 新增。"""
+    __tablename__ = 'memories'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    persona_id = Column(String(50), nullable=False, default="default", index=True)
+    # 类别: preference | fact | correction | summary
+    category = Column(String(20), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    # 来源消息的 client_msg_id（可追溯）
+    source_message_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_accessed = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    access_count = Column(Integer, default=0)
+
+    def __repr__(self):
+        return f"<Memory(category='{self.category}', content='{self.content[:30]}...')>"
+
+
 # 数据库引擎初始化辅助函数
 def init_db(db_path: str):
     # 首次启动会自动建表。

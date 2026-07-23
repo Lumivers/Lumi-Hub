@@ -378,6 +378,9 @@ class WsService extends ChangeNotifier {
       final data = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = data['type'] as String? ?? '';
 
+      // 优先处理 pending response（通过 message_id 匹配），不走 switch 分支。
+      _handlePendingResponse(data);
+
       // 协议分发中心：所有 Host 回包都从这里进入，再路由到具体处理函数。
       switch (type) {
         case 'CHAT_RESPONSE':
@@ -934,6 +937,31 @@ class WsService extends ChangeNotifier {
       _channel?.sink.add(jsonEncode(data));
     } catch (e) {
       debugPrint('[WS] 发送失败: $e');
+    }
+  }
+
+  /// 发送请求并等待响应（通过 message_id 匹配）。
+  Future<Map<String, dynamic>?> sendRequest(
+    String type,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (_status != WsStatus.connected) return null;
+    final msgId = _genId();
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingResponses[msgId] = completer;
+    _send({
+      'message_id': msgId,
+      'type': type,
+      'source': 'client',
+      'target': 'host',
+      'payload': payload,
+    });
+    try {
+      return await completer.future.timeout(timeout);
+    } on TimeoutException {
+      _pendingResponses.remove(msgId);
+      return null;
     }
   }
 

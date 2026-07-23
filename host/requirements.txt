@@ -1,6 +1,7 @@
 websockets>=12.0
 sqlalchemy
-passlib
+openai>=1.0.0
+anthropic>=0.30.0
 mcp>=0.1.0
 pypdf>=4.0.0
 dashscope>=1.23.4

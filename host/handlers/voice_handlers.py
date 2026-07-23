@@ -5,7 +5,8 @@ import base64
 import time
 import uuid
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 
 from ..voice_extensions import (
     TTSRequest,

@@ -11,7 +11,8 @@ from typing import Dict, Set, Optional, Callable, Awaitable
 
 import websockets
 from websockets.server import WebSocketServerProtocol
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 
 
 class LumiWSServer:

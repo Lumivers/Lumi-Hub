@@ -23,6 +23,7 @@ import 'mcp_settings_screen.dart';
 import 'resource_package_screen.dart';
 import 'voice_settings_screen.dart';
 import 'unity_launch_screen.dart';
+import 'llm_settings_screen.dart';
 
 part 'chat_screen_sidebar.dart';
 part 'chat_screen_sidebar_widgets.dart';

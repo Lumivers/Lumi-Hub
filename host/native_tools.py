@@ -2,7 +2,8 @@ import os
 import shutil
 import time
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 
 # 该模块提供“本地文件工具”能力，供 AI 在受控范围内读写工程文件。
 

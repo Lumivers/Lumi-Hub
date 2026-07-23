@@ -3,7 +3,8 @@ import json
 import asyncio
 from typing import Dict, Any, List
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
 

@@ -243,8 +243,13 @@ class AuthWrapper extends StatelessWidget {
     final bootstrap = context.watch<BootstrapService>();
     final ws = context.watch<WsService>();
 
-    // 页面路由优先级：启动流程 -> 鉴权页 -> 聊天页。
+    // 页面路由优先级：启动流程 -> LLM 配置 -> 鉴权页 -> 聊天页。
     if (!bootstrap.isReady) {
+      return const BootstrapScreen();
+    }
+
+    // LLM 未配置时停留在引导页，强制用户先配置。
+    if (!bootstrap.llmConfigured) {
       return const BootstrapScreen();
     }
 

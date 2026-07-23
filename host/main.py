@@ -1,38 +1,45 @@
 """
-Lumi-Hub AstrBot 平台适配器
-作为 AstrBot 的自定义消息平台，替代 QQ 对接 AstrBot。
-WebSocket Client 的消息通过此适配器进入 AstrBot 的 LLM 管道。
+Lumi-Hub 2.0 — 独立 Agent Runtime
+不依赖 AstrBot，纯 asyncio + WebSocket + LLM SDK
+
+替代原来的 LumiHubAdapter(Platform) + LumiHub(Star)。
 """
 import asyncio
+import os
+import json
 import time
 import uuid
-import json
-import os
-from collections.abc import Coroutine
-from typing import Any, Callable
+import logging
+import sys
+from typing import Any, Callable, Coroutine
 
-from astrbot.core import db_helper
-
-from astrbot.core.platform import (
-    AstrBotMessage,
-    MessageMember,
-    MessageType,
-    Platform,
-    PlatformMetadata,
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
-from astrbot.core.platform.astr_message_event import MessageSesion
-from astrbot.core.platform.register import register_platform_adapter
-from astrbot.core.message.message_event_result import MessageChain
-from astrbot.core.message.components import Plain, Image, Video
-from astrbot.core.star import Star
+logger = logging.getLogger("lumi")
 
 from .ws_server import LumiWSServer
-from .lumi_event import LumiMessageEvent
 from .database.manager import DatabaseManager
 from .mcp_manager import LumiMCPManager
+from .agent_loop import AgentLoop
+from .tool_registry import ToolRegistry
+from .persona_manager import PersonaManager
+from .llm import create_provider
+from .native_tools import (
+    read_file as native_read_file,
+    search_replace as native_search_replace,
+    insert_content as native_insert_content,
+    write_file as native_write_file,
+    delete_file as native_delete_file,
+    list_dir as native_list_dir,
+    get_file_size as native_get_file_size,
+    replace_content as native_replace_content,
+)
 from .handlers import (
     AuthHandlersMixin,
-    ChatHandlersMixin,
     HistoryHandlersMixin,
     McpHandlersMixin,
     PersonaHandlersMixin,
@@ -45,318 +52,41 @@ from .voice_extensions import (
     VoiceExtensionRegistry,
 )
 
-from astrbot.api import logger
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import register, Context
 
-# 全局共享状态，用于跨类传递实例
-_lumi_shared_state = {}
-
-@register("lumi_hub", "Lumi-Hub", "Lumi-Hub Native Tools Plugin", "1.0.0")
-class LumiHub(Star):
-    """AstrBot 插件壳与原生工具中心。
-    包含轻量级的原生 Python 本地执行工具 (双轨制 - Python Native Track)
-    """
-
-    async def initialize(self) -> None:
-        """插件启动时，深度优化 AI 的 Agent 意识"""
-        try:
-            pm = self.context.persona_manager
-            persona_id = pm.default_persona
-            persona = await pm.get_persona(persona_id)
-            
-            host_dir = os.path.dirname(os.path.realpath(__file__))
-            project_root = os.path.dirname(host_dir)
-            data_dir = os.path.join(project_root, "data")
-            
-            self.mcp_manager = LumiMCPManager(data_dir=data_dir)
-            await self.mcp_manager.initialize()
-            
-            # Inject into global state so LumiHubAdapter can access it
-            _lumi_shared_state["mcp_manager"] = self.mcp_manager
-            _lumi_shared_state["persona_manager"] = pm
-            
-            mcp_tools = await self.mcp_manager.get_all_tools()
-            mcp_prompt = ""
-            if mcp_tools:
-                mcp_prompt = "\n【外部 MCP 工具列表（必须严格匹配 Server 与 Tool 名称调用）】\n"
-                for t in mcp_tools:
-                    mcp_prompt += f"■ Server: `{t['server_name']}`, Tool: `{t['tool_name']}`\n  Desc: {t.get('description', '')}\n  Schema: {json.dumps(t.get('inputSchema', {}), ensure_ascii=False)}\n"
-            
-            agent_trigger = "### LUMI_IDE_AGENT_v2 ###"
-            # 采用 IDE 风格的强力指令集
-            agent_prompt = (
-                f"\n\n{agent_trigger}\n"
-                "【核心指令集：IDE 模式】\n"
-                "你现在是一个具备完整权限的高级软件工程师 Agent。你的工作效率取决于你的“少说多做”。\n"
-                "1. **ReAct 循环**：当你收到代码修改请求，请务必遵循：[思考 -> 读 -> 思考 -> 改/增/删 -> 验证]。\n"
-                "2. **严禁中断**：一旦 `read_file` 成功返回，你必须立即分析并调用 `search_replace` 或 `insert_content`。严禁在读取成功后向用户汇报“我已经读到了，这是内容”，除非你的最终修改已完成。\n"
-                "3. **精准编辑**：优先使用 `search_replace`。提供待修改的一段唯一的原始代码块（SEARCH）和替换后的代码块（REPLACE）。注意缩进必须严格匹配。\n"
-                "4. **主动性**：如果你不确定文件路径，先用 `list_dir`。发现错误时，先 `read_file` 报错行号。一切以解决问题为导向，而非复读代码内容。\n"
-                "5. **MCP 工具调用**：外部工具列表见下方。若需调用，请明确使用 `call_mcp_tool`。`server_name` 和 `tool_name` 必须**完全复制**下方列表中的值，严禁自行编造（例如不能把 notion 写成 mcp-notion，不能把 notion-search 简写为 search）！`arguments_json` 必须严格遵循对应工具的 Schema。\n"
-                "########################"
-                f"{mcp_prompt}"
-            )
-
-            
-            cleaned_prompt = persona.system_prompt
-            # 清理历史旧版指令标签（如果有）以及当前版本的标签，确保每次启动都重新注入最新的 MCP 工具列表
-            for old_tag in ["### LUMI_AGENT_RULES ###", "### LUMI_IDE_AGENT_v1 ###", agent_trigger]:
-                if old_tag in cleaned_prompt:
-                    idx = cleaned_prompt.find(old_tag)
-                    cleaned_prompt = cleaned_prompt[:idx].strip()
-            
-            new_prompt = cleaned_prompt + agent_prompt
-            await pm.update_persona(persona_id, system_prompt=new_prompt)
-            logger.info(f"[Lumi-Hub] 已成功为 '{persona_id}' 注入最新的 IDE-Style 及 MCP Agent 指令。")
-        except Exception as e:
-            logger.error(f"[Lumi-Hub] 增强人格失败: {e}")
-
-    async def terminate(self) -> None:
-        """插件卸载或退出时执行清理。"""
-        # MCP shutdown moved to adapter
-        pass
-
-    @filter.command("test_lumi")
-    async def test_lumi(self, event: AstrMessageEvent):
-        '''测试 Lumi-Hub 插件是否加载成功'''
-        yield event.plain_result("Lumi-Hub 原生工具插件已就绪！")
-
-    @filter.llm_tool(name="call_mcp_tool")
-    async def call_mcp_tool(self, event: AstrMessageEvent, server_name: str, tool_name: str, arguments_json: str):
-        '''调用外部 MCP Server 提供的工具。
-        Args:
-            server_name(string): 目标 MCP Server 的名称
-            tool_name(string): 要调用的工具名称
-            arguments_json(string): 传递给工具的参数，必须是合法的 JSON 字符串
-        '''
-        try:
-            arguments = json.loads(arguments_json)
-        except json.JSONDecodeError:
-            return "Error: arguments_json is not a valid JSON string."
-            
-        if hasattr(event, "wait_for_auth"):
-            approved = await event.wait_for_auth(
-                action_type="MCP_TOOL_CALL",
-                target_path=f"[{server_name}] {tool_name}",
-                description=f"调用外部 MCP 工具: {tool_name}",
-                tool_name="call_mcp_tool",
-                diff_preview=json.dumps(arguments, indent=2, ensure_ascii=False)
-            )
-            if not approved:
-                return "Error: User rejected the MCP tool call."
-                
-        if not hasattr(self, "mcp_manager"):
-            return "Error: MCP Manager not initialized."
-            
-        result = await self.mcp_manager.execute_tool(server_name, tool_name, arguments)
-        if result.get("error"):
-            return f"Error executing tool: {result.get('error')}"
-        if result.get("isError"):
-            return f"Error executing tool: {json.dumps(result.get('content', []), ensure_ascii=False)}"
-        
-        return json.dumps(result.get("content", []), ensure_ascii=False)
-
-    @filter.llm_tool(name="read_file")
-    async def read_file(self, event: AstrMessageEvent, path: str, start_line: int = 1, end_line: int = None):
-        '''读取本地指定路径文件的内容。支持分页读取。
-        注意：输出中的 Lx: 前缀是行号参考，不是文件内容，修改时请忽略。
-        Args:
-            path(string): 文件的结构完整路径
-            start_line(number): 起始行号，默认为 1
-            end_line(number): 结束行号（包左不包右），不填则读取到末尾
-        '''
-        logger.info(f"LLM 正在调用 read_file: {path} ({start_line}-{end_line})")
-        from .native_tools import read_file
-        return read_file(path, start_line, end_line)
-
-    @filter.llm_tool(name="search_replace")
-    async def search_replace(self, event: AstrMessageEvent, path: str, search_block: str, replace_block: str):
-        '''【最推荐】IDE 风格的搜索替换。
-        Args:
-            path(string): 文件完整路径
-            search_block(string): 必须提供待替换的原始代码片段（必须是在文件中唯一存在的，包含正确的缩进）。
-            replace_block(string): 替换后的新代码片段。
-        '''
-        if hasattr(event, "wait_for_auth"):
-            approved = await event.wait_for_auth(
-                action_type="FILE_MODIFY",
-                target_path=path,
-                description=f"修改文件并应用 SEARCH/REPLACE 块。",
-                tool_name="search_replace",
-                diff_preview=f"SEARCH:\n{search_block}\n\nREPLACE:\n{replace_block}"
-            )
-            if not approved:
-                return "Error: User rejected the file modification."
-
-        from .native_tools import search_replace
-        return search_replace(path, search_block, replace_block)
-
-    @filter.llm_tool(name="insert_content")
-    async def insert_content(self, event: AstrMessageEvent, path: str, line_number: int, content: str):
-        '''【推荐】在文件的指定行号位置插入新内容。
-        Args:
-            path(string): 文件的结构完整路径
-            line_number(number): 要插入的目标行号（1-indexed）
-            content(string): 要插入的文本内容（会自动换行）
-        '''
-        if hasattr(event, "wait_for_auth"):
-            approved = await event.wait_for_auth(
-                action_type="FILE_MODIFY",
-                target_path=path,
-                description=f"在第 {line_number} 行插入内容。",
-                tool_name="insert_content",
-                diff_preview=content
-            )
-            if not approved:
-                return "Error: User rejected the file modification."
-
-        from .native_tools import insert_content
-        return insert_content(path, line_number, content)
-
-
-    @filter.llm_tool(name="list_dir")
-    async def list_dir(self, event: AstrMessageEvent, path: str):
-        '''列出本地指定目录下的文件和文件夹。
-        Args:
-            path(string): 文件夹的结构完整路径
-        '''
-        from .native_tools import list_dir
-        return list_dir(path)
-        
-    @filter.llm_tool(name="write_file")
-    async def write_file(self, event: AstrMessageEvent, path: str, content: str):
-        '''【高危操作】将内容写入到本地文件中。操作前会自动备份原文件。如果文件不存在则新建。
-        Args:
-            path(string): 文件的结构完整路径
-            content(string): 要写入的完整内容
-        '''
-        if hasattr(event, "wait_for_auth"):
-            import os
-            approved = await event.wait_for_auth(
-                action_type="FILE_CREATE" if not os.path.exists(path) else "FILE_MODIFY",
-                target_path=path,
-                description=f"全量写入文件内容。",
-                tool_name="write_file",
-                diff_preview=content[:500] + ("..." if len(content) > 500 else "")
-            )
-            if not approved:
-                return "Error: User rejected the file operation."
-
-        from .native_tools import write_file
-        return write_file(path, content)
-
-    @filter.llm_tool(name="delete_file")
-    async def delete_file(self, event: AstrMessageEvent, path: str):
-        '''【高危操作】删除本地指定路径的文件。操作前会自动备份原文件到 .Lumi_cache。
-        Args:
-            path(string): 文件的结构完整路径
-        '''
-        if hasattr(event, "wait_for_auth"):
-            approved = await event.wait_for_auth(
-                action_type="FILE_DELETE",
-                target_path=path,
-                description=f"物理删除文件（已自动备份）。",
-                tool_name="delete_file"
-            )
-            if not approved:
-                return "Error: User rejected the file deletion."
-
-        from .native_tools import delete_file
-        return delete_file(path)
-
-    @filter.llm_tool(name="replace_content")
-    async def replace_content(self, event: AstrMessageEvent, path: str, old_content: str, new_content: str):
-        '''【推荐】精确修改文件内容。仅当您只需修改文件的一小部分时使用。必须提供唯一的 old_content。
-        Args:
-            path(string): 文件的结构完整路径
-            old_content(string): 要被替换的原始代码片段（必须唯一）
-            new_content(string): 替换后的新代码片段
-        '''
-        if hasattr(event, "wait_for_auth"):
-            approved = await event.wait_for_auth(
-                action_type="FILE_MODIFY",
-                target_path=path,
-                description=f"精确替换文件内容。",
-                tool_name="replace_content",
-                diff_preview=f"OLD:\n{old_content}\n\nNEW:\n{new_content}"
-            )
-            if not approved:
-                return "Error: User rejected the file modification."
-
-        from .native_tools import replace_content
-        return replace_content(path, old_content, new_content)
-
-
-
-    @filter.llm_tool(name="get_file_size")
-    async def get_file_size(self, event: AstrMessageEvent, path: str):
-        '''获取文件的字节数大小
-        Args:
-            path(string): 文件的结构完整路径
-        '''
-        from .native_tools import get_file_size
-        return get_file_size(path)
-@register_platform_adapter(
-    adapter_name="lumi_hub",
-    desc="Lumi-Hub 自建消息前端平台适配器",
-    adapter_display_name="Lumi-Hub",
-    default_config_tmpl={
-        "type": "lumi_hub",
-        "enable": True,
-        "id": "lumi_hub",
-        "ws_host": "0.0.0.0",
-        "ws_port": 8765,
-    },
-    support_streaming_message=True,
-)
-class LumiHubAdapter(
-    ChatHandlersMixin,
-    HistoryHandlersMixin,
-    PersonaHandlersMixin,
-    VoiceHandlersMixin,
-    UploadHandlersMixin,
+class LumiHubApp(
     AuthHandlersMixin,
+    HistoryHandlersMixin,
     McpHandlersMixin,
-    Platform,
+    PersonaHandlersMixin,
+    UploadHandlersMixin,
+    VoiceHandlersMixin,
 ):
-    """Lumi-Hub 平台适配器。
+    """Lumi-Hub 2.0 主应用。
 
-    功能：
-    1. 启动 WebSocket Server，接收 Flutter Client 连接
-    2. 将 Client 消息转为 AstrBotMessage，注入 AstrBot 事件队列
-    3. AstrBot 处理后通过 LumiMessageEvent.send() 回复给 Client
+    整合所有组件：WebSocket、数据库、MCP、LLM、工具注册、人格管理。
+    替代原来的 LumiHubAdapter(Platform) + LumiHub(Star)。
     """
 
-    def __init__(
-        self,
-        platform_config: dict,
-        platform_settings: dict,
-        event_queue: asyncio.Queue,
-    ) -> None:
-        super().__init__(platform_config, event_queue)
-
-        self.settings = platform_settings
-        ws_host = platform_config.get("ws_host", "0.0.0.0")
-        ws_port = platform_config.get("ws_port", 8765)
-
-        self.ws_server = LumiWSServer(host=ws_host, port=ws_port)
-        self.ws_server.on_message(self._handle_client_message)
-        self.ws_server.on_disconnect(self._handle_ws_disconnect)
-
-        # 初始化数据库管理器，数据存放在项目根目录下的 data 文件夹
-        import os
+    def __init__(self):
+        # 路径初始化
         host_dir = os.path.dirname(os.path.realpath(__file__))
         project_root = os.path.dirname(host_dir)
-        data_dir = os.path.join(project_root, "data")
-        self.data_dir = data_dir
-        self.db = DatabaseManager(data_dir=data_dir)
-        self.voice_config_path = os.path.join(data_dir, "voice_config.json")
-        self._voice_config_cache = self._load_voice_config()
-        self._dashscope_provider: DashScopeTTSProvider | None = None
+        self.data_dir = os.path.join(project_root, "data")
+        os.makedirs(self.data_dir, exist_ok=True)
 
-        # 上传缓存目录与会话状态
-        self.upload_root_dir = os.path.join(data_dir, "uploads")
+        # 核心组件
+        self.db = DatabaseManager(self.data_dir)
+        self.ws_server = LumiWSServer(
+            host=os.environ.get("LUMI_WS_HOST", "0.0.0.0"),
+            port=int(os.environ.get("LUMI_WS_PORT", "8765")),
+        )
+        self.persona_manager = PersonaManager(self.data_dir)
+        self.mcp_manager = LumiMCPManager(self.data_dir)
+        self.tool_registry = ToolRegistry()
+        self.llm = create_provider(data_dir=self.data_dir)
+
+        # 上传相关
+        self.upload_root_dir = os.path.join(self.data_dir, "uploads")
         self.upload_staging_dir = os.path.join(self.upload_root_dir, "_staging")
         os.makedirs(self.upload_staging_dir, exist_ok=True)
         self.upload_sessions: dict[str, dict[str, Any]] = {}
@@ -367,20 +97,21 @@ class LumiHubAdapter(
             "video/webm",
             "video/quicktime",
         }
-        self.allowed_mime_prefixes = (
-            "image/",
-            "audio/",
-        )
-        
-        # 记录已验证的 websocket session -> user_id
-        self.active_sessions: dict[str, int] = {}
+        self.allowed_mime_prefixes = ("image/", "audio/")
+
+        # 会话管理
+        self.active_sessions: dict[str, int] = {}  # ws_session_id -> user_id
+
+        # 语音扩展
+        self.voice_config_path = os.path.join(self.data_dir, "voice_config.json")
+        self._voice_config_cache = self._load_voice_config()
+        self._dashscope_provider: DashScopeTTSProvider | None = None
         self.voice_registry = VoiceExtensionRegistry()
         self.speech_sessions = SpeechSessionController()
         self._voice_turn_tasks: dict[tuple[str, str], asyncio.Task] = {}
-        self._shared_state = _lumi_shared_state
         self._setup_voice_extensions()
-        # WebSocket 业务消息路由表：前端 type -> 对应处理函数。
-        # 约定：仅在这里维护入口映射，具体处理逻辑分散在各个 mixin 中。
+
+        # WebSocket 消息路由表
         self._message_handlers: dict[
             str, Callable[[dict, str], Coroutine[Any, Any, None]]
         ] = {
@@ -404,23 +135,23 @@ class LumiHubAdapter(
             "VOICE_TTS_REQUEST": self._dispatch_voice_tts_request,
             "VOICE_INTERRUPT": self._handle_voice_interrupt,
             "TTS_CANCEL": self._handle_voice_interrupt,
+            "LLM_CONFIG_GET": self._handle_llm_config_get,
+            "LLM_CONFIG_SET": self._handle_llm_config_set,
+            "APP_STATUS": self._handle_app_status,
         }
 
-        self.metadata = PlatformMetadata(
-            name="lumi_hub",
-            description="Lumi-Hub 自建消息前端",
-            id=platform_config.get("id", "lumi_hub"),
-            adapter_display_name="Lumi-Hub",
-            support_streaming_message=True,
-            support_proactive_message=True,
-        )
+        # WebSocket 回调注册
+        self.ws_server.on_message(self._handle_client_message)
+        self.ws_server.on_disconnect(self._handle_ws_disconnect)
 
-        self._shutdown_event = asyncio.Event()
+        # Agent prompt（IDE 模式指令）
+        self._agent_prompt = ""
 
     def _setup_voice_extensions(self) -> None:
+        """初始化语音扩展。"""
         provider_name = str(os.environ.get("LUMI_VOICE_PROVIDER", "dashscope")).strip().lower()
         if provider_name != "dashscope":
-            logger.warning("[Lumi-Hub] Voice provider '%s' is not supported yet", provider_name)
+            logger.warning(f"[Lumi-Hub] Voice provider '{provider_name}' is not supported yet")
             return
 
         env_default_voice = str(os.environ.get("LUMI_DASHSCOPE_VOICE_ID", "")).strip()
@@ -452,9 +183,7 @@ class LumiHubAdapter(
         try:
             with open(self.voice_config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                return data
-            return {}
+            return data if isinstance(data, dict) else {}
         except Exception as e:
             logger.warning(f"[Lumi-Hub] Failed to load voice config: {e}")
             return {}
@@ -466,126 +195,283 @@ class LumiHubAdapter(
         except Exception as e:
             logger.error(f"[Lumi-Hub] Failed to save voice config: {e}")
 
-    def run(self) -> Coroutine[Any, Any, None]:
-        """返回平台运行协程，AstrBot 会将其作为 asyncio.Task 启动。"""
-        return self._run()
+    def _register_native_tools(self):
+        """注册所有原生工具到 ToolRegistry。"""
+        registry = self.tool_registry
 
-    async def _run(self) -> None:
-        """启动 WebSocket Server 并等待关闭信号。"""
-        try:
-            await self.ws_server.start()
-            self.status = __import__(
-                "astrbot.core.platform.platform", fromlist=["PlatformStatus"]
-            ).PlatformStatus.RUNNING
-            logger.info("[Lumi-Hub] 平台适配器已启动")
-            await self._shutdown_event.wait()
-        except Exception as e:
-            logger.error(f"[Lumi-Hub] 平台适配器启动失败: {e}")
-            raise
+        @registry.register(
+            name="read_file",
+            description="读取本地指定路径文件的内容。支持分页读取。输出中的 Lx: 前缀是行号参考，不是文件内容。",
+            parameters={
+                "path": {"type": "string", "description": "文件的结构完整路径"},
+                "start_line": {"type": "integer", "description": "起始行号，默认为 1", "default": 1},
+                "end_line": {"type": "integer", "description": "结束行号（包左不包右），不填则读取到末尾"},
+            },
+        )
+        def read_file(path: str, start_line: int = 1, end_line: int = None) -> str:
+            return native_read_file(path, start_line, end_line)
 
-    async def terminate(self) -> None:
-        """关闭平台适配器。"""
-        logger.info("[Lumi-Hub] 平台适配器关闭中...")
+        @registry.register(
+            name="search_replace",
+            description="【最推荐】IDE 风格的搜索替换。提供待修改的唯一原始代码块(SEARCH)和替换后的代码块(REPLACE)。",
+            parameters={
+                "path": {"type": "string", "description": "文件完整路径"},
+                "search_block": {"type": "string", "description": "待替换的原始代码片段（必须唯一，包含正确缩进）"},
+                "replace_block": {"type": "string", "description": "替换后的新代码片段"},
+            },
+            requires_auth=True,
+            auth_action_type="FILE_MODIFY",
+        )
+        def search_replace(path: str, search_block: str, replace_block: str) -> str:
+            return native_search_replace(path, search_block, replace_block)
 
-        for task in list(self._voice_turn_tasks.values()):
-            if not task.done():
-                task.cancel()
-        self._voice_turn_tasks.clear()
+        @registry.register(
+            name="insert_content",
+            description="【推荐】在文件的指定行号位置插入新内容。",
+            parameters={
+                "path": {"type": "string", "description": "文件的结构完整路径"},
+                "line_number": {"type": "integer", "description": "要插入的目标行号（1-indexed）"},
+                "content": {"type": "string", "description": "要插入的文本内容"},
+            },
+            requires_auth=True,
+            auth_action_type="FILE_MODIFY",
+        )
+        def insert_content(path: str, line_number: int, content: str) -> str:
+            return native_insert_content(path, line_number, content)
 
-        self._shutdown_event.set()
-        await self.ws_server.stop()
-        
-        mcp_manager = _lumi_shared_state.get("mcp_manager")
-        if mcp_manager:
-            logger.info("[Lumi-Hub] 正在关闭 MCP Manager...")
-            await mcp_manager.shutdown()
+        @registry.register(
+            name="list_dir",
+            description="列出本地指定目录下的文件和文件夹。",
+            parameters={
+                "path": {"type": "string", "description": "文件夹的结构完整路径"},
+            },
+        )
+        def list_dir(path: str) -> str:
+            return native_list_dir(path)
 
-    def meta(self) -> PlatformMetadata:
-        """返回平台元数据。"""
-        return self.metadata
+        @registry.register(
+            name="write_file",
+            description="【高危操作】将内容写入到本地文件中。操作前会自动备份原文件。如果文件不存在则新建。",
+            parameters={
+                "path": {"type": "string", "description": "文件的结构完整路径"},
+                "content": {"type": "string", "description": "要写入的完整内容"},
+            },
+            requires_auth=True,
+            auth_action_type="FILE_MODIFY",
+        )
+        def write_file(path: str, content: str) -> str:
+            return native_write_file(path, content)
 
-    async def send_by_session(
-        self,
-        session: MessageSesion,
-        message_chain: MessageChain,
-    ) -> None:
-        """通过会话发送主动消息（插件主动推送）。"""
-        # 从 session_id 中提取 user_id 和 context_id
-        # 格式: lumi_hub!{user_id}!{context_id}!{persona_id}
-        parts = session.session_id.split("!")
-        user_id = None
-        persona_id = "default"
-        if len(parts) >= 3:
-            try:
-                user_id = int(parts[1])
-            except ValueError:
-                pass
-        if len(parts) >= 4:
-            persona_id = parts[3]
+        @registry.register(
+            name="delete_file",
+            description="【高危操作】删除本地指定路径的文件。操作前会自动备份原文件到 .Lumi_cache。",
+            parameters={
+                "path": {"type": "string", "description": "文件的结构完整路径"},
+            },
+            requires_auth=True,
+            auth_action_type="FILE_DELETE",
+        )
+        def delete_file(path: str) -> str:
+            return native_delete_file(path)
 
-        text_parts = []
-        for comp in message_chain.chain:
-            if isinstance(comp, Plain):
-                text_parts.append(comp.text)
-                
-        content_str = "".join(text_parts)
+        @registry.register(
+            name="replace_content",
+            description="【推荐】精确修改文件内容。仅当您只需修改文件的一小部分时使用。必须提供唯一的 old_content。",
+            parameters={
+                "path": {"type": "string", "description": "文件的结构完整路径"},
+                "old_content": {"type": "string", "description": "要被替换的原始代码片段（必须唯一）"},
+                "new_content": {"type": "string", "description": "替换后的新代码片段"},
+            },
+            requires_auth=True,
+            auth_action_type="FILE_MODIFY",
+        )
+        def replace_content(path: str, old_content: str, new_content: str) -> str:
+            return native_replace_content(path, old_content, new_content)
 
-        if content_str and user_id is not None:
-            # 存入数据库 (无论用户是否在线、连接是否存在都可以保存)
-            self.db.save_message(user_id=user_id, role="assistant", content=content_str, persona_id=persona_id)
-            
-            # 查找所有关联到该 user_id 的 ws_session_id 并分发
-            target_ws_ids = [ws_id for ws_id, uid in self.active_sessions.items() if uid == user_id]
-            for ws_id in target_ws_ids:
-                msg = {
-                    "message_id": str(uuid.uuid4())[:8],
-                    "type": "CHAT_RESPONSE",
+        @registry.register(
+            name="get_file_size",
+            description="获取文件的字节数大小。",
+            parameters={
+                "path": {"type": "string", "description": "文件的结构完整路径"},
+            },
+        )
+        def get_file_size(path: str) -> str:
+            return native_get_file_size(path)
+
+        logger.info(f"[Lumi-Hub] 已注册 {len(self.tool_registry.list_tools())} 个原生工具")
+
+    async def _build_agent_prompt(self):
+        """构建 IDE 模式的 Agent 指令（含 MCP 工具列表）。"""
+        mcp_tools = await self.mcp_manager.get_all_tools()
+        mcp_prompt = ""
+        if mcp_tools:
+            mcp_prompt = "\n【外部 MCP 工具列表（必须严格匹配 Server 与 Tool 名称调用）】\n"
+            for t in mcp_tools:
+                mcp_prompt += (
+                    f"■ Server: `{t['server_name']}`, Tool: `{t['tool_name']}`\n"
+                    f"  Desc: {t.get('description', '')}\n"
+                    f"  Schema: {json.dumps(t.get('inputSchema', {}), ensure_ascii=False)}\n"
+                )
+
+        self._agent_prompt = (
+            "\n\n### LUMI_IDE_AGENT_v2 ###\n"
+            "【核心指令集: IDE 模式】\n"
+            "You are a senior software engineer Agent. Your efficiency depends on 'do more, talk less'.\n"
+            "1. ReAct Loop: When receiving code modification requests, follow: [think -> read -> think -> modify -> verify].\n"
+            "2. No Interrupt: Once read_file returns successfully, you MUST immediately analyze and call search_replace or insert_content. Never report file content back to the user unless your modification is complete.\n"
+            "3. Precise Edit: Prefer search_replace. Provide a unique original code block (SEARCH) and the replacement block (REPLACE). Indentation must match exactly.\n"
+            "4. Proactive: If unsure about file paths, use list_dir first. When encountering errors, use read_file on the error line. Everything is problem-solving oriented.\n"
+            "5. MCP Tools: See the external tool list below. Use the exact tool names and follow the Schema strictly.\n"
+            "########################"
+            f"{mcp_prompt}"
+        )
+
+    async def _handle_chat_request(self, message: dict, ws_session_id: str) -> None:
+        """处理 CHAT_REQUEST：创建 AgentLoop 并执行。"""
+        payload = message.get("payload", {})
+        user_content = payload.get("content", "")
+        original_user_content = str(user_content or "").strip()
+        attachments = payload.get("attachments", []) or []
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        context_id = payload.get("context_id", ws_session_id)
+        persona_id = payload.get("persona_id", "default")
+
+        # 鉴权校验
+        user_id = self.active_sessions.get(ws_session_id)
+        if not user_id:
+            logger.warning("[Lumi-Hub] 未登录用户尝试发送消息，已拒绝")
+            await self.ws_server.send_to_client(
+                ws_session_id,
+                {
+                    "message_id": msg_id,
+                    "type": "ERROR_ALERT",
                     "source": "host",
                     "target": "client",
                     "timestamp": int(time.time() * 1000),
-                    "payload": {
-                        "content": content_str,
-                        "status": "success",
-                        "persona": persona_id,
-                    },
-                }
-                await self.ws_server.send_to_client(ws_id, msg)
+                    "payload": {"error_code": "UNAUTHORIZED", "detail": "请先登录"},
+                },
+            )
+            return
 
-        await super().send_by_session(session, message_chain)
+        # 处理附件
+        attachment_lines: list[str] = []
+        attachment_hints: list[str] = []
+        if isinstance(attachments, list):
+            for att in attachments:
+                if not isinstance(att, dict):
+                    continue
+                file_name = str(att.get("file_name", "未命名文件"))
+                mime_type = str(att.get("mime_type", "application/octet-stream"))
+                size_bytes = int(att.get("size_bytes", 0) or 0)
+                storage_path = str(att.get("storage_path", "") or "")
 
-    # ---------- WebSocket 消息处理 ----------
+                attachment_lines.append(f"- {file_name} ({mime_type}, {size_bytes} bytes)")
+
+                if mime_type == "application/pdf" and storage_path:
+                    abs_path = os.path.join(self.data_dir, storage_path)
+                    preview = self._extract_pdf_preview(abs_path)
+                    if preview:
+                        attachment_hints.append(f"\n[PDF节选: {file_name}]\n{preview}\n")
+                    else:
+                        attachment_hints.append(
+                            f"\n[PDF提示: {file_name}] 当前未能提取 PDF 文本，请先基于文件名和上下文回答。\n"
+                        )
+
+        if attachment_lines:
+            base = (user_content or "").strip()
+            if not base:
+                base = "我上传了附件，请先确认接收并根据附件内容回答。"
+            user_content = f"{base}\n\n[附件列表]\n" + "\n".join(attachment_lines)
+            if attachment_hints:
+                user_content += "\n\n" + "\n".join(attachment_hints)
+
+        logger.info(f"[Lumi-Hub] 收到消息 (session={ws_session_id}, persona={persona_id}): {user_content[:100]}")
+
+        # 持久化用户消息
+        if isinstance(attachments, list) and attachments:
+            for att in attachments:
+                att = att or {}
+                file_name = str(att.get("file_name", "未命名文件"))
+                mime_type = str(att.get("mime_type", "")).lower()
+                local_path = str(att.get("local_path", "") or att.get("storage_path", ""))
+                is_img = mime_type.startswith("image/") or file_name.endswith((".png", ".jpg", ".jpeg", ".webp"))
+                prefix = "[图片]" if is_img else "[附件]"
+                self.db.save_message(
+                    user_id=user_id,
+                    role="user",
+                    content=f"{prefix} {local_path}|||{file_name}",
+                    client_msg_id=f"{msg_id}_att_{file_name}",
+                    persona_id=persona_id,
+                )
+
+        if original_user_content:
+            self.db.save_message(
+                user_id=user_id,
+                role="user",
+                content=original_user_content,
+                client_msg_id=msg_id,
+                persona_id=persona_id,
+            )
+
+        # 获取人格
+        persona = await self.persona_manager.get_persona(persona_id)
+        if not persona:
+            persona = await self.persona_manager.get_persona("default")
+
+        # 获取历史消息
+        history = self.db.get_messages(
+            user_id=user_id,
+            persona_id=persona_id,
+            limit=50,
+            offset=0,
+        )
+
+        # 创建 AgentLoop 并执行
+        session_id = f"lumi_hub!{user_id}!{context_id}!{persona_id}"
+        agent = AgentLoop(
+            llm_provider=self.llm,
+            tool_registry=self.tool_registry,
+            persona_system_prompt=persona.system_prompt if persona else "",
+            history_messages=history[:-1] if history else [],  # 排除刚保存的用户消息
+            ws_server=self.ws_server,
+            ws_session_id=ws_session_id,
+            user_id=user_id,
+            persona_id=persona_id,
+            db=self.db,
+            mcp_manager=self.mcp_manager,
+            agent_prompt=self._agent_prompt,
+            msg_id=msg_id,
+            session_id=session_id,
+        )
+
+        # 异步执行 Agent
+        asyncio.create_task(agent.run(user_content, attachments))
 
     async def _handle_client_message(self, message: dict, ws_session_id: str) -> None:
         """处理从 WebSocket Client 收到的业务消息。"""
         msg_type = message.get("type", "")
-
-        # 统一从路由表分发，避免 if-elif 链持续膨胀。
         handler = self._message_handlers.get(msg_type)
         if handler is None:
             logger.warning(f"[Lumi-Hub] 未知消息类型: {msg_type}")
             return
-
         await handler(message, ws_session_id)
 
     async def _handle_ws_disconnect(self, ws_session_id: str) -> None:
         """WebSocket 断开后的资源清理。"""
-        # 1) 清理鉴权会话映射
         self.active_sessions.pop(ws_session_id, None)
 
-        # 2) 取消语音会话与正在执行的语音任务
+        # 清理语音会话
         active_turn = await self.speech_sessions.clear_session(ws_session_id)
         if active_turn:
             await self.voice_registry.cancel_all(ws_session_id, active_turn)
 
-        stale_voice_keys = [
-            key for key in self._voice_turn_tasks.keys() if key[0] == ws_session_id
-        ]
+        stale_voice_keys = [key for key in self._voice_turn_tasks if key[0] == ws_session_id]
         for key in stale_voice_keys:
             task = self._voice_turn_tasks.pop(key, None)
             if task and not task.done():
                 task.cancel()
 
-        # 3) 删除断连会话未完成的上传临时数据
+        # 清理上传会话
         stale_upload_ids = [
             upload_id
             for upload_id, session in self.upload_sessions.items()
@@ -594,40 +480,262 @@ class LumiHubAdapter(
         for upload_id in stale_upload_ids:
             self._discard_upload_session(upload_id)
 
-    @filter.llm_tool(name="call_mcp_tool")
-    async def call_mcp_tool(self, event: AstrMessageEvent, server_name: str, tool_name: str, arguments_json: str):
-        '''调用外部 MCP Server 提供的工具。
-        Args:
-            server_name(string): 目标 MCP Server 的名称
-            tool_name(string): 要调用的工具名称
-            arguments_json(string): 传递给工具的参数，必须是合法的 JSON 字符串
-        '''
+    def _discard_upload_session(self, upload_id: str) -> None:
+        """丢弃上传会话。"""
+        session = self.upload_sessions.pop(upload_id, None)
+        if not session:
+            return
+        tmp_path = session.get("tmp_path", "")
         try:
-            arguments = json.loads(arguments_json)
-        except json.JSONDecodeError:
-            return "Error: arguments_json is not a valid JSON string."
-            
-        if hasattr(event, "wait_for_auth"):
-            approved = await event.wait_for_auth(
-                action_type="MCP_TOOL_CALL",
-                target_path=f"[{server_name}] {tool_name}",
-                description=f"调用外部 MCP 工具: {tool_name}",
-                tool_name="call_mcp_tool",
-                diff_preview=json.dumps(arguments, indent=2, ensure_ascii=False)
-            )
-            if not approved:
-                return "Error: User rejected the MCP tool call."
-                
-        if not hasattr(self, "mcp_manager"):
-            return "Error: MCP Manager not initialized."
-            
-        try:
-            res = await self.mcp_manager.call_tool(server_name, tool_name, arguments)
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
         except Exception as e:
-            return f"Error calling MCP tool: {e}"
-            
-        try:
-            return json.dumps(res, ensure_ascii=False)
-        except Exception as e:
-            return f"Error executing tool: {e}"
+            logger.warning(f"[Lumi-Hub] 清理临时上传文件失败: {e}")
 
+    def _extract_pdf_preview(self, abs_path: str, max_chars: int = 6000, max_pages: int = 5) -> str:
+        """提取 PDF 预览文本。"""
+        if not abs_path or not os.path.exists(abs_path):
+            return ""
+        try:
+            from pypdf import PdfReader
+        except Exception:
+            return ""
+        try:
+            reader = PdfReader(abs_path)
+            parts: list[str] = []
+            for idx, page in enumerate(reader.pages):
+                if idx >= max_pages:
+                    break
+                text = page.extract_text() or ""
+                if text.strip():
+                    parts.append(text.strip())
+                if sum(len(p) for p in parts) >= max_chars:
+                    break
+            merged = "\n\n".join(parts).strip()
+            return merged[:max_chars] if len(merged) > max_chars else merged
+        except Exception as e:
+            logger.warning(f"[Lumi-Hub] PDF 解析失败: {e}")
+            return ""
+
+    # ========== 配置管理接口 ==========
+
+    @property
+    def _llm_config_path(self) -> str:
+        return os.path.join(self.data_dir, "llm_config.json")
+
+    def _load_llm_config(self) -> dict:
+        """读取 LLM 配置文件。"""
+        if os.path.exists(self._llm_config_path):
+            try:
+                with open(self._llm_config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"provider": "openai", "api_key": "", "base_url": "", "model": "gpt-4o"}
+
+    def _save_llm_config(self, config: dict) -> None:
+        """保存 LLM 配置文件。"""
+        with open(self._llm_config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+
+    async def _reload_llm_provider(self, config: dict):
+        """热重载 LLM Provider。"""
+        try:
+            from .llm import create_provider
+            self.llm = create_provider(
+                data_dir=self.data_dir,
+                provider_type=config.get("provider"),
+                api_key=config.get("api_key", ""),
+                base_url=config.get("base_url") or None,
+                default_model=config.get("model"),
+            )
+            logger.info(f"[Lumi-Hub] LLM Provider 已热重载: {type(self.llm).__name__}")
+        except Exception as e:
+            logger.error(f"[Lumi-Hub] LLM Provider 热重载失败: {e}")
+            raise
+
+    async def _handle_llm_config_get(self, message: dict, ws_session_id: str) -> None:
+        """获取 LLM 配置（不返回完整 API Key，只返回掩码版本）。"""
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        config = self._load_llm_config()
+
+        # 掩码 API Key
+        api_key = config.get("api_key", "")
+        masked_key = ""
+        if api_key:
+            if len(api_key) > 8:
+                masked_key = api_key[:4] + "*" * (len(api_key) - 8) + api_key[-4:]
+            else:
+                masked_key = "****"
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "LLM_CONFIG_RESPONSE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "status": "success",
+                "config": {
+                    "provider": config.get("provider", "openai"),
+                    "model": config.get("model", ""),
+                    "base_url": config.get("base_url", ""),
+                    "api_key_masked": masked_key,
+                    "api_key_configured": bool(api_key),
+                },
+            },
+        })
+
+    async def _handle_llm_config_set(self, message: dict, ws_session_id: str) -> None:
+        """更新 LLM 配置并热重载。"""
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        payload = message.get("payload", {})
+        new_config = payload.get("config", {})
+
+        if not isinstance(new_config, dict):
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "LLM_CONFIG_SET_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {"status": "error", "message": "Invalid config format"},
+            })
+            return
+
+        # 合并配置（保留未传入的字段）
+        current = self._load_llm_config()
+        for key in ("provider", "api_key", "base_url", "model"):
+            if key in new_config:
+                current[key] = new_config[key]
+
+        # 保存
+        try:
+            self._save_llm_config(current)
+        except Exception as e:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "LLM_CONFIG_SET_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {"status": "error", "message": f"Save failed: {e}"},
+            })
+            return
+
+        # 热重载
+        try:
+            await self._reload_llm_provider(current)
+        except Exception as e:
+            await self.ws_server.send_to_client(ws_session_id, {
+                "message_id": msg_id,
+                "type": "LLM_CONFIG_SET_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {"status": "error", "message": f"Reload failed: {e}"},
+            })
+            return
+
+        # 需要登录才能操作
+        user_id = self.active_sessions.get(ws_session_id)
+        if user_id:
+            # 更新人格中的 agent prompt
+            await self._build_agent_prompt()
+            default_persona = await self.persona_manager.get_persona("default")
+            if default_persona:
+                cleaned = default_persona.system_prompt
+                for old_tag in ["### LUMI_AGENT_RULES ###", "### LUMI_IDE_AGENT_v1 ###", "### LUMI_IDE_AGENT_v2 ###"]:
+                    if old_tag in cleaned:
+                        idx = cleaned.find(old_tag)
+                        cleaned = cleaned[:idx].strip()
+                default_persona.system_prompt = cleaned + self._agent_prompt
+                await self.persona_manager.save_persona(default_persona)
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "LLM_CONFIG_SET_RESPONSE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {"status": "success", "message": "LLM config updated and reloaded"},
+        })
+
+    async def _handle_app_status(self, message: dict, ws_session_id: str) -> None:
+        """返回应用状态（供客户端检查 LLM 是否已配置等）。"""
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        config = self._load_llm_config()
+        api_key = config.get("api_key", "")
+
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "APP_STATUS_RESPONSE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "version": "2.0.0",
+                "llm_configured": bool(api_key),
+                "llm_provider": config.get("provider", "openai"),
+                "llm_model": config.get("model", ""),
+            },
+        })
+
+    async def start(self):
+        """启动应用。"""
+        logger.info("[Lumi-Hub] Lumi-Hub 2.0 独立 Agent Runtime 启动中...")
+
+        # 注册原生工具
+        self._register_native_tools()
+
+        # 初始化 MCP
+        await self.mcp_manager.initialize()
+
+        # 绑定 MCP Manager 到 ToolRegistry
+        self.tool_registry.set_mcp_manager(self.mcp_manager)
+
+        # 构建 Agent Prompt（含 MCP 工具列表）
+        await self._build_agent_prompt()
+
+        # 注入 Agent Prompt 到默认人格
+        default_persona = await self.persona_manager.get_persona("default")
+        if default_persona:
+            # 清理旧版指令标签
+            cleaned = default_persona.system_prompt
+            for old_tag in ["### LUMI_AGENT_RULES ###", "### LUMI_IDE_AGENT_v1 ###", "### LUMI_IDE_AGENT_v2 ###"]:
+                if old_tag in cleaned:
+                    idx = cleaned.find(old_tag)
+                    cleaned = cleaned[:idx].strip()
+            default_persona.system_prompt = cleaned + self._agent_prompt
+            await self.persona_manager.save_persona(default_persona)
+            logger.info("[Lumi-Hub] 已为默认人格注入 IDE-Style 及 MCP Agent 指令")
+
+        # 启动 WebSocket Server
+        await self.ws_server.start()
+        logger.info("[Lumi-Hub] Lumi-Hub 2.0 已就绪！")
+
+        # 保持运行
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            pass
+
+    async def stop(self):
+        """停止应用。"""
+        logger.info("[Lumi-Hub] 正在关闭...")
+        await self.mcp_manager.shutdown()
+        await self.ws_server.stop()
+        logger.info("[Lumi-Hub] 已关闭")
+
+
+def main():
+    """应用入口。"""
+    app = LumiHubApp()
+    try:
+        asyncio.run(app.start())
+    except KeyboardInterrupt:
+        logger.info("[Lumi-Hub] 收到中断信号，正在退出...")
+
+
+if __name__ == "__main__":
+    main()

@@ -3,7 +3,8 @@ from __future__ import annotations
 import time
 import uuid
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 
 
 class HistoryHandlersMixin:

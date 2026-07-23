@@ -6,7 +6,8 @@ from datetime import timezone
 from sqlalchemy import or_
 from sqlalchemy.orm import sessionmaker
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 from .models import init_db, User, Message, Attachment
 
 class DatabaseManager:

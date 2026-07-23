@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'components/connection_settings_dialog.dart';
+import 'llm_settings_screen.dart';
 import '../services/app_settings.dart';
 import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
@@ -18,54 +17,7 @@ class BootstrapScreen extends StatefulWidget {
 }
 
 class _BootstrapScreenState extends State<BootstrapScreen> {
-  bool _bootTriggered = false;
-
-  bool get _supportsLocalHostLifecycle => !kIsWeb && Platform.isWindows;
-
-  bool _isLocalHostUrl(String raw) {
-    final uri = Uri.tryParse(raw);
-    if (uri == null) return false;
-    final host = uri.host.toLowerCase();
-    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
-  }
-
-  Future<void> _applyConnectionMode(
-    WsService ws,
-    AppSettings settings,
-    ConnectionMode mode,
-    String? customUrl,
-  ) async {
-    // 启动前统一归一化连接模式，决定默认地址与是否远程客户端模式。
-    final currentUrl = ws.serverUrl;
-
-    String nextUrl = currentUrl;
-    final shouldUseRemote =
-        mode != ConnectionMode.localOrUsb || !_supportsLocalHostLifecycle;
-
-    switch (mode) {
-      case ConnectionMode.localOrUsb:
-        nextUrl = 'ws://127.0.0.1:8765';
-        break;
-      case ConnectionMode.lan:
-        if (customUrl != null && customUrl.trim().isNotEmpty) {
-          nextUrl = customUrl.trim();
-        } else if (_isLocalHostUrl(currentUrl)) {
-          nextUrl = 'ws://192.168.1.10:8765';
-        }
-        break;
-      case ConnectionMode.publicTunnel:
-        if (customUrl != null && customUrl.trim().isNotEmpty) {
-          nextUrl = customUrl.trim();
-        } else if (_isLocalHostUrl(currentUrl)) {
-          nextUrl = 'wss://your-domain.example.com/ws';
-        }
-        break;
-    }
-
-    settings.setConnectionMode(mode);
-    settings.setRemoteClientMode(shouldUseRemote);
-    await ws.setServerUrl(nextUrl, reconnectIfConnected: false);
-  }
+  bool _bootTriggered = bool.fromEnvironment('dart.vm.product') == false ? false : false;
 
   Future<void> _showConnectionModeDialog(BuildContext context) async {
     final ws = context.read<WsService>();
@@ -81,51 +33,30 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
     );
   }
 
-  Future<void> _openConnectionSettings() async {
-    final ws = context.read<WsService>();
-    final settings = context.read<AppSettings>();
-    final changed = await ConnectionSettingsDialog.show(
-      context,
-      ws: ws,
-      settings: settings,
-      title: '连接设置',
-      confirmText: '保存设置',
-      barrierDismissible: true,
-      allowCancel: true,
-    );
-
-    if (!mounted || !changed) return;
-
-    final bootstrap = context.read<BootstrapService>();
-    if (bootstrap.hasFailed) {
-      await bootstrap.retry();
-      return;
-    }
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('连接设置已保存，下次连接将使用新地址。')));
-  }
-
   Future<void> _prepareAndStart() async {
     if (_bootTriggered || !mounted) return;
     _bootTriggered = true;
 
-    final ws = context.read<WsService>();
     final settings = context.read<AppSettings>();
     await settings.loaded;
     if (!mounted) return;
 
-    // 首次阶段：先确定连接模式，再进入 BootstrapService 启动流程。
     if (settings.askConnectionModeOnLaunch) {
       await _showConnectionModeDialog(context);
-    } else {
-      await _applyConnectionMode(ws, settings, settings.connectionMode, null);
     }
 
     if (!mounted) return;
     await context.read<BootstrapService>().ensureStarted();
+  }
+
+  void _openLlmSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const LlmSettingsScreen()),
+    );
+    // 从设置页返回后刷新 LLM 配置状态
+    if (mounted) {
+      context.read<BootstrapService>().refreshLlmStatus();
+    }
   }
 
   @override
@@ -154,20 +85,13 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                   CircleAvatar(
                     radius: 28,
                     backgroundColor: Theme.of(context).colorScheme.primary,
-                    child: const Icon(
-                      Icons.rocket_launch,
-                      color: Colors.white,
-                      size: 28,
-                    ),
+                    child: const Icon(Icons.rocket_launch, color: Colors.white, size: 28),
                   ),
                   const SizedBox(width: 14),
                   const Expanded(
                     child: Text(
-                      'Lumi-Hub 启动准备',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      'Lumi-Hub',
+                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],
@@ -181,7 +105,9 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (!bootstrap.hasFailed)
+
+              // 进度条或错误提示
+              if (!bootstrap.hasFailed && !bootstrap.isReady)
                 const LinearProgressIndicator(minHeight: 6),
               if (bootstrap.hasFailed)
                 Container(
@@ -192,14 +118,80 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                   ),
                   child: Text(
                     bootstrap.error ?? '启动失败',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onErrorContainer,
-                    ),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
                   ),
                 ),
+
+              // LLM 未配置提示
+              if (bootstrap.isReady && !bootstrap.llmConfigured) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(Icons.smart_toy, size: 48, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(height: 12),
+                      Text(
+                        '配置 AI 服务',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'LLM 尚未配置，请先设置 API Key 才能开始对话。',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _openLlmSettings,
+                        icon: const Icon(Icons.settings),
+                        label: const Text('去配置'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              // 启动成功提示
+              if (bootstrap.isReady && bootstrap.llmConfigured) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(Icons.check_circle, size: 48, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(height: 12),
+                      Text(
+                        '准备就绪',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'AI: ${bootstrap.llmProvider} (${bootstrap.llmModel})',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 16),
+
+              // 日志区域
               Container(
-                height: 250,
+                height: 180,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   border: Border.all(color: Theme.of(context).dividerColor),
@@ -213,57 +205,62 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                     switch (log.level) {
                       case LogLevel.error:
                         color = Theme.of(context).colorScheme.error;
-                        break;
                       case LogLevel.warning:
                         color = Colors.orange;
-                        break;
                       case LogLevel.debug:
                         color = Colors.grey;
-                        break;
                       case LogLevel.info:
                         color = Theme.of(context).colorScheme.onSurfaceVariant;
-                        break;
                     }
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 2),
                       child: Text(
                         log.toString(),
-                        style: TextStyle(
-                          fontFamily: 'Consolas',
-                          fontSize: 12,
-                          color: color,
-                        ),
+                        style: TextStyle(fontFamily: 'Consolas', fontSize: 12, color: color),
                       ),
                     );
                   },
                 ),
               ),
               const SizedBox(height: 16),
+
+              // 底部按钮
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  if (!bootstrap.hasFailed)
-                    Expanded(
-                      child: Text(
-                        bootstrap.isRemoteClientMode
-                            ? '启动流程：远程地址检测 -> WebSocket 连接 -> 登录'
-                            : '启动流程：环境检查 -> AstrBot 检测/拉起 -> Host 连通性确认 -> 登录',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  if (bootstrap.hasFailed) const Spacer(),
                   OutlinedButton.icon(
-                    onPressed: _openConnectionSettings,
+                    onPressed: () {
+                      final ws = context.read<WsService>();
+                      final settings = context.read<AppSettings>();
+                      ConnectionSettingsDialog.show(
+                        context,
+                        ws: ws,
+                        settings: settings,
+                        title: '连接设置',
+                        confirmText: '保存',
+                        barrierDismissible: true,
+                        allowCancel: true,
+                      );
+                    },
                     icon: const Icon(Icons.tune, size: 16),
                     label: const Text('连接设置'),
                   ),
-                  if (bootstrap.hasFailed) const SizedBox(width: 8),
-                  if (bootstrap.hasFailed)
+                  if (bootstrap.isReady) ...[
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _openLlmSettings,
+                      icon: const Icon(Icons.smart_toy, size: 16),
+                      label: const Text('LLM 设置'),
+                    ),
+                  ],
+                  if (bootstrap.hasFailed) ...[
+                    const SizedBox(width: 8),
                     FilledButton.icon(
                       onPressed: bootstrap.retry,
                       icon: const Icon(Icons.refresh),
-                      label: const Text('重试启动'),
+                      label: const Text('重试'),
                     ),
+                  ],
                 ],
               ),
             ],
@@ -277,20 +274,14 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
     switch (stage) {
       case BootstrapStage.init:
         return '正在初始化...';
-      case BootstrapStage.checkingEnv:
-        return '正在进行环境检查...';
-      case BootstrapStage.checkingHost:
-        return '正在检查 Host 是否已运行...';
-      case BootstrapStage.startingAstrBot:
-        return '正在启动 AstrBot...';
-      case BootstrapStage.waitingHost:
-        return '正在等待 Host 端口可用...';
       case BootstrapStage.connectingWs:
-        return '正在连接 WebSocket...';
+        return '正在连接 Host...';
+      case BootstrapStage.checkingConfig:
+        return '正在检查配置...';
       case BootstrapStage.ready:
-        return '启动完成。';
+        return '启动完成';
       case BootstrapStage.failed:
-        return '启动失败。';
+        return '启动失败';
     }
   }
 }

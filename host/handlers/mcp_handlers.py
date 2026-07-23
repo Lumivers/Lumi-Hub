@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import uuid
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 
 
 class McpHandlersMixin:
     async def _handle_mcp_config_get(self, message: dict, ws_session_id: str) -> None:
         """获取当前 MCP 配置"""
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
-        mcp_manager = self._shared_state.get("mcp_manager")
+        mcp_manager = self.mcp_manager
 
         if mcp_manager:
             config = mcp_manager.get_config()
@@ -42,7 +43,7 @@ class McpHandlersMixin:
         config = payload.get("config", {})
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
 
-        mcp_manager = self._shared_state.get("mcp_manager")
+        mcp_manager = self.mcp_manager
         if mcp_manager:
             try:
                 await mcp_manager.update_config(config)

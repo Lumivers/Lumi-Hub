@@ -1,1 +1,3 @@
-from .main import LumiHub, LumiHubAdapter
+"""
+Lumi-Hub 2.0 — 独立 Agent Runtime
+"""

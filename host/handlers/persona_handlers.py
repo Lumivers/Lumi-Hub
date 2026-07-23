@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 import uuid
 
-from astrbot.api import logger
-from astrbot.core import db_helper
+import logging
+logger = logging.getLogger("lumi")
 
 
 class PersonaHandlersMixin:
@@ -14,23 +14,17 @@ class PersonaHandlersMixin:
     """
 
     async def _handle_persona_switch(self, message: dict, ws_session_id: str) -> None:
-        """处理人格切换请求：真实切换 AstrBot 的默认人格。"""
+        """处理人格切换请求。"""
         payload = message.get("payload", {})
         persona_id = payload.get("persona_id", "default")
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
 
-        # 通过共享状态拿到 AstrBot 的 persona_manager，并更新默认人格。
-        pm = self._shared_state.get("persona_manager")
-        if pm:
-            try:
-                pm.default_persona = persona_id
-                logger.info(f"[Lumi-Hub] 人格已切换至: {persona_id}")
-                status = "switched"
-            except Exception as e:
-                logger.error(f"[Lumi-Hub] 切换人格失败: {e}")
-                status = "error"
-        else:
-            logger.warning("[Lumi-Hub] persona_manager 未初始化，无法切换人格")
+        try:
+            self.persona_manager.default_persona = persona_id
+            logger.info(f"[Lumi-Hub] 人格已切换至: {persona_id}")
+            status = "switched"
+        except Exception as e:
+            logger.error(f"[Lumi-Hub] 切换人格失败: {e}")
             status = "error"
 
         await self.ws_server.send_to_client(
@@ -156,16 +150,14 @@ class PersonaHandlersMixin:
             )
 
     async def _handle_persona_delete(self, message: dict, ws_session_id: str) -> None:
-        """从 AstrBot 中删除指定人格。"""
+        """删除指定人格。"""
         payload = message.get("payload", {})
         persona_id = payload.get("persona_id", "")
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
 
-        # 删除操作直接委托给 persona_manager，确保与 AstrBot 内部状态一致。
-        pm = self._shared_state.get("persona_manager")
-        if pm and persona_id:
+        if persona_id:
             try:
-                await pm.delete_persona(persona_id)
+                await self.persona_manager.delete_persona(persona_id)
                 logger.info(f"[Lumi-Hub] 人格 '{persona_id}' 已删除")
                 await self.ws_server.send_to_client(
                     ws_session_id,
@@ -199,30 +191,15 @@ class PersonaHandlersMixin:
                     "target": "client",
                     "payload": {
                         "status": "error",
-                        "message": "persona_manager 未初始化或 persona_id 为空",
+                        "message": "persona_id 不能为空",
                     },
                 },
             )
 
     async def _handle_persona_list(self, message: dict, ws_session_id: str) -> None:
-        """返回 AstrBot 中已有的人格列表。"""
+        """返回已有的人格列表。"""
         try:
-            personas = await db_helper.get_personas()
-            persona_list = []
-            for p in personas:
-                # 仅回传系统提示词预览，避免前端一次加载过长文本。
-                persona_list.append(
-                    {
-                        "id": p.persona_id,
-                        "name": p.persona_id,
-                        "system_prompt_preview": (p.system_prompt[:200] + "...")
-                        if len(p.system_prompt) > 200
-                        else p.system_prompt,
-                        "has_begin_dialogs": bool(p.begin_dialogs),
-                        "tools": p.tools,
-                        "skills": p.skills,
-                    }
-                )
+            persona_list = await self.persona_manager.list_personas()
             logger.info(f"[Lumi-Hub] 返回 {len(persona_list)} 个人格")
         except Exception as e:
             logger.error(f"[Lumi-Hub] 读取人格列表失败: {e}")

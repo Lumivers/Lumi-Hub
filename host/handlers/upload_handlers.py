@@ -7,7 +7,8 @@ import os
 import time
 import uuid
 
-from astrbot.api import logger
+import logging
+logger = logging.getLogger("lumi")
 
 
 class UploadHandlersMixin:
