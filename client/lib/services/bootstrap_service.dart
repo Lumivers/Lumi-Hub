@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'app_settings.dart';
 import 'ws_service.dart';
 
 enum BootstrapStage {
@@ -49,7 +49,6 @@ class LogEntry {
 
 class BootstrapService extends ChangeNotifier {
   final WsService _ws;
-  final AppSettings _settings;
   Future<void>? _startFuture;
 
   BootstrapStage _stage = BootstrapStage.init;
@@ -72,7 +71,34 @@ class BootstrapService extends ChangeNotifier {
   String _llmModel = '';
   String get llmModel => _llmModel;
 
-  BootstrapService(this._ws, this._settings);
+  // ── 首次运行检测 ──
+
+  /// 是否已完成首次引导向导。
+  /// 首次启动时为 false，向导完成后写入 SharedPreferences 标记为 true。
+  bool _setupCompleted = false;
+  bool get setupCompleted => _setupCompleted;
+
+  /// 是否为首次运行（需要显示引导向导）。
+  /// 条件：向导未完成 且 LLM 未配置。
+  bool get isFirstRun => !_setupCompleted && !_llmConfigured;
+
+  BootstrapService(this._ws) {
+    _loadSetupFlag();
+  }
+
+  Future<void> _loadSetupFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    _setupCompleted = prefs.getBool('app.setup_completed') ?? false;
+    notifyListeners();
+  }
+
+  /// 向导完成后调用，标记首次引导已结束。
+  Future<void> markSetupCompleted() async {
+    _setupCompleted = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('app.setup_completed', true);
+    notifyListeners();
+  }
 
   Future<void> ensureStarted() {
     _startFuture ??= start();
@@ -189,9 +215,9 @@ class BootstrapService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // ── 退出处理（兼容旧 UI 调用） ──
+  // ── 退出处理 ──
 
-  Future<void> handleAppExit({required bool closeAstrBotOnExit}) async {
+  Future<void> handleAppExit() async {
     // 2.0 独立模式下 Host 由 start.py 管理，客户端退出无需额外操作。
   }
 }

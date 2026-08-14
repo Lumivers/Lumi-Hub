@@ -260,11 +260,18 @@ class _ChatScreenState extends State<ChatScreen> {
     ).showSnackBar(const SnackBar(content: Text('已开始生成语音')));
   }
 
+  WsService? _wsService;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _wsService = context.read<WsService>();
+  }
+
   @override
   void dispose() {
-    final ws = context.read<WsService>();
-    if (_wsListener != null) {
-      ws.removeListener(_wsListener!);
+    if (_wsListener != null && _wsService != null) {
+      _wsService!.removeListener(_wsListener!);
     }
     _scroll.removeListener(_onScrollMaybeLoadOlder);
     _authSubscription?.cancel();

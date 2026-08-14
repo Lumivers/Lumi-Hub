@@ -246,7 +246,7 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
                           title: Text(localModeLabel),
                           subtitle: Text(
                             _supportsLocalHostLifecycle
-                                ? '适合电脑端本机启动 AstrBot'
+                                ? '适合电脑端本机启动 Host 服务'
                                 : '需 adb reverse tcp:8765 tcp:8765',
                           ),
                         ),

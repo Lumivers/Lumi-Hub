@@ -46,13 +46,12 @@ void main() async {
       providers: [
         ChangeNotifierProvider(create: (_) => AppSettings()),
         ChangeNotifierProvider(create: (_) => WsService()),
-        ChangeNotifierProxyProvider2<WsService, AppSettings, BootstrapService>(
+        ChangeNotifierProxyProvider<WsService, BootstrapService>(
           create: (context) => BootstrapService(
             context.read<WsService>(),
-            context.read<AppSettings>(),
           ),
-          update: (context, ws, settings, previous) =>
-              previous ?? BootstrapService(ws, settings),
+          update: (context, ws, previous) =>
+              previous ?? BootstrapService(ws),
         ),
       ],
       child: const LumiApp(),
@@ -104,13 +103,10 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
       await windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
       if (_isClosing) return;
-      final settings = context.read<AppSettings>();
       final bootstrap = context.read<BootstrapService>();
       _isClosing = true;
       trayManager.destroy(); // hide tray immediately
-      await bootstrap.handleAppExit(
-        closeAstrBotOnExit: settings.closeAstrBotOnExit,
-      );
+      await bootstrap.handleAppExit();
       await windowManager.destroy();
     }
   }
@@ -213,9 +209,7 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
 
     _isClosing = true;
     trayManager.destroy(); // make sure tray goes away
-    await bootstrap.handleAppExit(
-      closeAstrBotOnExit: settings.closeAstrBotOnExit,
-    );
+    await bootstrap.handleAppExit();
 
     await windowManager.destroy();
   }
@@ -243,20 +237,27 @@ class AuthWrapper extends StatelessWidget {
     final bootstrap = context.watch<BootstrapService>();
     final ws = context.watch<WsService>();
 
-    // 页面路由优先级：启动流程 -> LLM 配置 -> 鉴权页 -> 聊天页。
+    // 1. 首次运行 → 引导向导（向导内部自行处理连接、LLM 配置、注册）
+    if (bootstrap.isFirstRun) {
+      return const SetupWizardScreen();
+    }
+
+    // 2. 还没连上 Host → 等待连接（老用户走简洁等待页）
     if (!bootstrap.isReady) {
       return const BootstrapScreen();
     }
 
-    // LLM 未配置时停留在引导页，强制用户先配置。
+    // 3. 连上了但 LLM 未配置 → 引导向导
     if (!bootstrap.llmConfigured) {
-      return const BootstrapScreen();
+      return const SetupWizardScreen();
     }
 
-    // 如果没有鉴权通过，则展示 AuthScreen，否则展示 ChatScreen
+    // 4. 未认证 → 登录页
     if (!ws.isAuthenticated) {
       return const AuthScreen();
     }
+
+    // 5. 一切就绪 → 聊天页
     return const ChatScreen();
   }
 }

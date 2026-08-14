@@ -6,7 +6,7 @@
     "type": "Monorepo",
     "directories": {
       "client": "Flutter 前端客户端（当前主开发目录）",
-      "host": "AstrBot 平台适配器与 WS 服务（Python）",
+      "host": "独立 Agent Runtime 与 WS 服务（Python）",
       "data": "运行期数据目录（MCP 配置、上传文件等）",
       "docs": "开发文档与日志（多数为本地记录）"
     }

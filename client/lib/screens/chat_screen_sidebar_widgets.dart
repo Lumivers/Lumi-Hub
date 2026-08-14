@@ -629,44 +629,7 @@ class _SettingsDialog extends StatelessWidget {
                         indent: 48,
                       ),
 
-                      // 3. 随前端关闭 AstrBot
-                      ListTile(
-                        contentPadding: const EdgeInsets.only(
-                          left: 16,
-                          right: 8,
-                        ),
-                        leading: Icon(
-                          Icons.power_settings_new,
-                          color: colors.subtext,
-                          size: 20,
-                        ),
-                        title: Text(
-                          '同步关闭 AstrBot',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Theme.of(context).colorScheme.onSurface,
-                          ),
-                        ),
-                        subtitle: Text(
-                          '完全退出时结束核心进程',
-                          style: TextStyle(color: colors.subtext, fontSize: 12),
-                        ),
-                        trailing: Transform.scale(
-                          scale: 0.8,
-                          child: Switch(
-                            value: settings.closeAstrBotOnExit,
-                            onChanged: settings.setCloseAstrBotOnExit,
-                            activeThumbColor: colors.accent,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ),
-                      ),
-                      Divider(
-                        height: 1,
-                        color: colors.divider.withValues(alpha: 0.2),
-                        indent: 48,
-                      ),
+
 
                       // 4. 连接方式
                       ListTile(

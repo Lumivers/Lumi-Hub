@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../services/ws_service.dart';
 
-/// LLM 配置页面 — 独立于 AstrBot，通过 WebSocket 直接配置 Host。
+/// LLM 配置页面 — 通过 WebSocket 直接配置 Host。
 class LlmSettingsScreen extends StatefulWidget {
   const LlmSettingsScreen({super.key});
 

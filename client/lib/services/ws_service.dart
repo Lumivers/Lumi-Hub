@@ -441,6 +441,10 @@ class WsService extends ChangeNotifier {
         case 'PERSONA_DELETE_RESPONSE':
           _personaController.add(data);
           break;
+        case 'LLM_CONFIG_RESPONSE':
+        case 'APP_STATUS_RESPONSE':
+          // 已由 _handlePendingResponse 消费
+          break;
         default:
           debugPrint('[WS] 未处理消息类型: $type');
       }
@@ -458,14 +462,14 @@ class WsService extends ChangeNotifier {
     final assistantId = _assistantMsgId(msgId);
     final isFromStreaming = _streamingMsgIds.contains(msgId);
 
-    // 如果已经在流式拼接同一条消息，则以最终内容覆盖，避免重复插入。
+    // 同 message_id 的多次 CHAT_RESPONSE 视为追加/覆盖。
     final existingIndex = _messages.indexWhere(
       (m) => m.id == assistantId && m.sender == MessageSender.ai,
     );
     if (existingIndex != -1) {
       final existing = _messages[existingIndex];
 
-      // 兼容 AstrBot 的“分段回复”：同 message_id 的多次 CHAT_RESPONSE 视为追加。
+      // 支持分段回复：同 message_id 的多次 CHAT_RESPONSE 视为追加。
       // 若来自 CHAT_STREAM_CHUNK 流程，则最终 CHAT_RESPONSE 以完整文本覆盖。
       final nextContent = isFromStreaming
           ? content

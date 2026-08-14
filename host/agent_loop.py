@@ -323,7 +323,7 @@ class AgentLoop:
     ) -> bool:
         """向客户端发送 AUTH_REQUIRED 并等待 AUTH_RESPONSE。
 
-        从 lumi_event.py 迁移过来，逻辑完全不变。
+        原 lumi_event.py 中的审批逻辑，已迁移至此。
         返回 True 表示已获批准，False 表示拒绝或超时。
         """
         auth_msg_id = f"auth-{str(uuid.uuid4())[:8]}"

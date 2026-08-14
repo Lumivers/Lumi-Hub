@@ -139,7 +139,7 @@ class _SidebarState extends State<_Sidebar> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除人格'),
-        content: Text('确认从 AstrBot 中删除人格「$personaId」？\n此操作不可恢复。'),
+        content: Text('确认删除人格「$personaId」？\n此操作不可恢复。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),

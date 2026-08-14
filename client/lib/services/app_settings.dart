@@ -25,7 +25,7 @@ class AppSettings extends ChangeNotifier {
   final Completer<void> _loadedCompleter = Completer<void>();
   bool _isLoaded = false;
   static const String _fontKeyStorage = 'app.font_key';
-  static const String _closeAstrBotOnExitStorage = 'app.close_astrbot_on_exit';
+
   static const String _windowCloseActionStorage = 'app.window_close_action';
   static const String _remoteClientModeStorage = 'app.remote_client_mode';
   static const String _connectionModeStorage = 'app.connection_mode';
@@ -36,7 +36,7 @@ class AppSettings extends ChangeNotifier {
   static const String _ttsVoiceIdStorage = 'app.tts_voice_id';
 
   String _fontFamily = 'MiSans'; // 默认使用 MiSans
-  bool _closeAstrBotOnExit = false;
+
   WindowCloseAction _windowCloseAction = WindowCloseAction.ask;
   bool _remoteClientMode = false;
   ConnectionMode _connectionMode = ConnectionMode.localOrUsb;
@@ -55,7 +55,7 @@ class AppSettings extends ChangeNotifier {
   /// 当前字体 key
   String get fontKey => _fontFamily;
 
-  bool get closeAstrBotOnExit => _closeAstrBotOnExit;
+
   WindowCloseAction get windowCloseAction => _windowCloseAction;
   bool get remoteClientMode => _remoteClientMode;
   ConnectionMode get connectionMode => _connectionMode;
@@ -72,12 +72,7 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
-  void setCloseAstrBotOnExit(bool value) {
-    if (_closeAstrBotOnExit == value) return;
-    _closeAstrBotOnExit = value;
-    notifyListeners();
-    _save();
-  }
+
 
   void setWindowCloseAction(WindowCloseAction value) {
     if (_windowCloseAction == value) return;
@@ -126,7 +121,7 @@ class AppSettings extends ChangeNotifier {
     // 统一从 SharedPreferences 回填，缺省值按平台场景给出。
     final prefs = await SharedPreferences.getInstance();
     _fontFamily = prefs.getString(_fontKeyStorage) ?? 'MiSans';
-    _closeAstrBotOnExit = prefs.getBool(_closeAstrBotOnExitStorage) ?? false;
+
     final closeActionRaw = prefs.getString(_windowCloseActionStorage) ?? 'ask';
     _windowCloseAction = switch (closeActionRaw) {
       'minimize' => WindowCloseAction.minimize,
@@ -164,7 +159,7 @@ class AppSettings extends ChangeNotifier {
     // 每次修改都持久化，保证重启后配置一致。
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_fontKeyStorage, _fontFamily);
-    await prefs.setBool(_closeAstrBotOnExitStorage, _closeAstrBotOnExit);
+
     final closeActionRaw = switch (_windowCloseAction) {
       WindowCloseAction.ask => 'ask',
       WindowCloseAction.minimize => 'minimize',
