@@ -12,7 +12,9 @@ part 'mcp_settings_widgets.dart';
 // ── Main Screen ─────────────────────────────────────────────────────────────
 
 class McpSettingsScreen extends StatefulWidget {
-  const McpSettingsScreen({super.key});
+  final bool embedded;
+
+  const McpSettingsScreen({super.key, this.embedded = false});
 
   @override
   State<McpSettingsScreen> createState() => _McpSettingsScreenState();
@@ -133,8 +135,39 @@ class _McpSettingsScreenState extends State<McpSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).extension<LumiColors>()!;
+    final colors = Theme.of(context).extension<LumiColors>() ??
+        (Theme.of(context).brightness == Brightness.dark ? LumiColors.dark() : LumiColors.light());
     final colorScheme = Theme.of(context).colorScheme;
+
+    final body = _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _buildBody(colors, colorScheme);
+
+    if (widget.embedded) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Text(
+                  '已配置 ${_rawServers.length} 个 MCP 服务',
+                  style: TextStyle(color: colors.subtext, fontSize: 13),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: _isLoading ? null : () => _openEditor(),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('添加 Server'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(child: body),
+        ],
+      );
+    }
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -164,9 +197,7 @@ class _McpSettingsScreenState extends State<McpSettingsScreen> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _buildBody(colors, colorScheme),
+      body: body,
     );
   }
 

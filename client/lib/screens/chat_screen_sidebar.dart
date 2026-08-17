@@ -186,9 +186,9 @@ class _SidebarState extends State<_Sidebar> {
                   ),
                 ),
                 IconButton(
-                  icon: Icon(Icons.auto_awesome, color: colors.accent),
-                  tooltip: '打开 Firefly',
-                  onPressed: () => UnityLaunchScreen.open(context),
+                  icon: Icon(Icons.face_retouching_natural, color: colors.accent),
+                  tooltip: '打开 Live2D 桌宠伴侣',
+                  onPressed: () => Live2dCompanionScreen.open(context),
                 ),
               ],
             ),
@@ -258,121 +258,129 @@ class _SidebarState extends State<_Sidebar> {
           ),
 
           Divider(height: 1, color: colors.divider),
+          const SizedBox(height: 8),
 
-          // MCP 扩展入口
+          // ── 记忆档案 + 技能中心 双格胶囊按钮 ──
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-            child: ListTile(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              hoverColor: colors.accent.withValues(alpha: 0.1),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              leading: Icon(
-                Icons.extension_outlined,
-                color: colors.subtext,
-                size: 20,
-              ),
-              title: Text(
-                '扩展生态 (MCP)',
-                style: TextStyle(color: colors.subtext, fontSize: 13),
-              ),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const McpSettingsScreen(),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    hoverColor: colors.accent.withValues(alpha: 0.08),
+                    onTap: () => MemoryScreen.show(context),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                      decoration: BoxDecoration(
+                        color: colors.inputBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: colors.divider.withValues(alpha: 0.15),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.psychology_outlined,
+                            size: 16,
+                            color: colors.accent,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '记忆档案',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                );
-              },
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    hoverColor: colors.accent.withValues(alpha: 0.08),
+                    onTap: () => SkillScreen.show(context),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                      decoration: BoxDecoration(
+                        color: colors.inputBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: colors.divider.withValues(alpha: 0.15),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.bolt_outlined,
+                            size: 16,
+                            color: colors.accent,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '技能中心',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
+          const SizedBox(height: 6),
 
-          // 资源包入口（解耦后独立页面）
+          // ── 统一设置中心入口 (包含 通用设置 / AI模型 / MCP扩展 / 资源包) ──
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
             child: ListTile(
+              dense: true,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
               hoverColor: colors.accent.withValues(alpha: 0.1),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              leading: Icon(
-                Icons.archive_outlined,
-                color: colors.subtext,
-                size: 20,
-              ),
-              title: Text(
-                '可扩展资源包',
-                style: TextStyle(color: colors.subtext, fontSize: 13),
-              ),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const ResourcePackageScreen(),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // LLM 设置入口
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-            child: ListTile(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              hoverColor: colors.accent.withValues(alpha: 0.1),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              leading: Icon(
-                Icons.smart_toy_outlined,
-                color: colors.subtext,
-                size: 20,
-              ),
-              title: Text(
-                'AI 模型设置',
-                style: TextStyle(color: colors.subtext, fontSize: 13),
-              ),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const LlmSettingsScreen(),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // 设置入口
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-            child: ListTile(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              hoverColor: colors.accent.withValues(alpha: 0.1),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14),
               leading: Icon(
                 Icons.settings_outlined,
                 color: colors.subtext,
                 size: 20,
               ),
               title: Text(
-                '设置',
-                style: TextStyle(color: colors.subtext, fontSize: 13),
+                '设置中心',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              trailing: Icon(
+                Icons.chevron_right,
+                color: colors.subtext.withValues(alpha: 0.5),
+                size: 18,
               ),
               onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (_) => _SettingsDialog(ws: ws, colors: colors),
+                SettingsHubDialog.show(
+                  context,
+                  ws: ws,
+                  colors: colors,
                 );
               },
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
         ],
       ),
     );

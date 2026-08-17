@@ -11,20 +11,26 @@ venv/
 .env
 sync.py
 
-# Flutter 编译产物
+# Flutter 编译产物与跨平台 Ephemeral
 /client/build/
 /client/.dart_tool/
 /client/.flutter-plugins
 /client/.flutter-plugins-dependencies
+/client/windows/flutter/ephemeral/
+/client/macos/Flutter/ephemeral/
+/client/linux/flutter/ephemeral/
+EBWebView/
 *.zip
 *.apk
 *.ipa
 *.sha1
+*.log
 
 # IDE 与系统
 .vscode/
 .idea/
 .DS_Store
+*.swp
 
 # C++ 编译产物
 /cpp_launcher/build/
@@ -36,5 +42,4 @@ sync.py
 !readme.md
 
 /voiceclone
-
 /host/tools/output_audio

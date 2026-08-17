@@ -7,7 +7,9 @@ import '../services/ws_service.dart';
 
 /// LLM 配置页面 — 通过 WebSocket 直接配置 Host。
 class LlmSettingsScreen extends StatefulWidget {
-  const LlmSettingsScreen({super.key});
+  final bool embedded;
+
+  const LlmSettingsScreen({super.key, this.embedded = false});
 
   @override
   State<LlmSettingsScreen> createState() => _LlmSettingsScreenState();
@@ -97,9 +99,106 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('LLM 设置')),
+        appBar: widget.embedded ? null : AppBar(title: const Text('LLM 设置')),
         body: const Center(child: CircularProgressIndicator()),
       );
+    }
+
+    final body = ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        // Provider 选择
+        Text('AI 服务商', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'openai', label: Text('OpenAI'), icon: Icon(Icons.auto_awesome)),
+            ButtonSegment(value: 'anthropic', label: Text('Anthropic'), icon: Icon(Icons.psychology)),
+            ButtonSegment(value: 'ollama', label: Text('Ollama'), icon: Icon(Icons.computer)),
+          ],
+          selected: {_provider},
+          onSelectionChanged: (v) => setState(() => _provider = v.first),
+        ),
+        const SizedBox(height: 24),
+
+        // API Key
+        Text('API Key', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _apiKeyController,
+          obscureText: true,
+          decoration: InputDecoration(
+            hintText: _apiKeyConfigured ? '已配置 ($_apiKeyMasked)，留空不修改' : '输入 API Key',
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.key),
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // Base URL
+        Text('Base URL（可选）', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _baseUrlController,
+          decoration: InputDecoration(
+            hintText: _provider == 'ollama'
+                ? 'http://localhost:11434/v1'
+                : '留空使用默认端点',
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.link),
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // Model
+        Text('Model 名称', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _modelController,
+          decoration: InputDecoration(
+            hintText: _defaultModelForProvider(_provider),
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.psychology_outlined),
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // 提示卡片
+        Card(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline, size: 20, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _providerHint(_provider),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        if (widget.embedded) ...[
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.save),
+            label: const Text('保存并热重载'),
+          ),
+        ],
+      ],
+    );
+
+    if (widget.embedded) {
+      return body;
     }
 
     return Scaffold(
@@ -116,91 +215,7 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
-        children: [
-          // Provider 选择
-          Text('AI 服务商', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'openai', label: Text('OpenAI'), icon: Icon(Icons.auto_awesome)),
-              ButtonSegment(value: 'anthropic', label: Text('Anthropic'), icon: Icon(Icons.psychology)),
-              ButtonSegment(value: 'ollama', label: Text('Ollama'), icon: Icon(Icons.computer)),
-            ],
-            selected: {_provider},
-            onSelectionChanged: (v) => setState(() => _provider = v.first),
-          ),
-          const SizedBox(height: 24),
-
-          // API Key
-          Text('API Key', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _apiKeyController,
-            obscureText: true,
-            decoration: InputDecoration(
-              hintText: _apiKeyConfigured ? '已配置 ($_apiKeyMasked)，留空不修改' : '输入 API Key',
-              border: const OutlineInputBorder(),
-              prefixIcon: const Icon(Icons.key),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // Base URL
-          Text('Base URL（可选）', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _baseUrlController,
-            decoration: InputDecoration(
-              hintText: _provider == 'ollama'
-                  ? 'http://localhost:11434/v1'
-                  : '留空使用默认端点',
-              border: const OutlineInputBorder(),
-              prefixIcon: const Icon(Icons.link),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // Model
-          Text('模型', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _modelController,
-            decoration: InputDecoration(
-              hintText: _defaultModelForProvider(_provider),
-              border: const OutlineInputBorder(),
-              prefixIcon: const Icon(Icons.smart_toy),
-            ),
-          ),
-          const SizedBox(height: 32),
-
-          // 提示
-          Card(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.info_outline, size: 18, color: Theme.of(context).colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Text('提示', style: Theme.of(context).textTheme.titleSmall),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _providerHint(_provider),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+      body: body,
     );
   }
 

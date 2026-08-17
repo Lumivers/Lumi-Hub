@@ -191,3 +191,50 @@ class MemoryManager:
                     logger.info(f"[MemoryManager] 已删除记忆 {memory_id}")
         except Exception as e:
             logger.warning(f"[MemoryManager] 删除记忆失败: {e}")
+
+    def list_memories(self, user_id: int, persona_id: str, category: Optional[str] = None) -> list[dict]:
+        """列出指定用户与人格的所有记忆。"""
+        try:
+            with self.db.SessionLocal() as session:
+                from .database.models import Memory
+                query = session.query(Memory).filter(
+                    Memory.user_id == user_id,
+                    Memory.persona_id == persona_id,
+                )
+                if category:
+                    query = query.filter(Memory.category == category)
+
+                memories = query.order_by(Memory.created_at.desc()).all()
+                return [
+                    {
+                        "id": m.id,
+                        "category": m.category,
+                        "content": m.content,
+                        "created_at": m.created_at.isoformat() if m.created_at else "",
+                        "last_accessed": m.last_accessed.isoformat() if m.last_accessed else "",
+                        "access_count": m.access_count or 0,
+                    }
+                    for m in memories
+                ]
+        except Exception as e:
+            logger.warning(f"[MemoryManager] 查询记忆列表失败: {e}")
+            return []
+
+    def clear_memories(self, user_id: int, persona_id: str) -> int:
+        """清空指定用户与人格的所有记忆。"""
+        try:
+            with self.db.SessionLocal() as session:
+                from .database.models import Memory
+                query = session.query(Memory).filter(
+                    Memory.user_id == user_id,
+                    Memory.persona_id == persona_id,
+                )
+                count = query.count()
+                query.delete()
+                session.commit()
+                logger.info(f"[MemoryManager] 已清空用户 {user_id} 在人格 {persona_id} 下的 {count} 条记忆")
+                return count
+        except Exception as e:
+            logger.warning(f"[MemoryManager] 清空记忆失败: {e}")
+            return 0
+

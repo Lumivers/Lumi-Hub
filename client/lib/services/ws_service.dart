@@ -293,14 +293,16 @@ class WsService extends ChangeNotifier {
   void sendMessage(
     String text, {
     List<Map<String, dynamic>> attachments = const [],
+    String? skillName,
+    Map<String, dynamic>? skillParams,
   }) {
     final normalized = text.trim();
     if (_status != WsStatus.connected) return;
-    if (normalized.isEmpty && attachments.isEmpty) return;
+    if (normalized.isEmpty && attachments.isEmpty && skillName == null) return;
 
     final contentForHost = normalized.isNotEmpty
         ? normalized
-        : '我上传了附件，请先确认接收并根据附件内容回答。';
+        : (skillName != null ? '执行技能：$skillName' : '我上传了附件，请先确认接收并根据附件内容回答。');
 
     final requestId = _genId();
     final now = DateTime.now();
@@ -331,11 +333,13 @@ class WsService extends ChangeNotifier {
       );
     }
 
-    if (normalized.isNotEmpty) {
+    if (normalized.isNotEmpty || skillName != null) {
       _messages.add(
         ChatMessage(
           id: requestId,
-          content: normalized,
+          content: normalized.isNotEmpty
+              ? normalized
+              : (skillName != null ? '⚡ 触发技能: $skillName' : ''),
           sender: MessageSender.me,
           time: now,
         ),
@@ -356,18 +360,24 @@ class WsService extends ChangeNotifier {
     notifyListeners();
 
     // 发送到 Host
+    final payload = <String, dynamic>{
+      'content': contentForHost,
+      'context_id': 'default',
+      'persona_id': _activePersonaId,
+      'attachments': attachments,
+    };
+    if (skillName != null && skillName.isNotEmpty) {
+      payload['skill_name'] = skillName;
+      payload['skill_params'] = skillParams ?? {};
+    }
+
     _send({
       'message_id': requestId,
       'type': 'CHAT_REQUEST',
       'source': 'client',
       'target': 'host',
       'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'payload': {
-        'content': contentForHost,
-        'context_id': 'default',
-        'persona_id': _activePersonaId,
-        'attachments': attachments,
-      },
+      'payload': payload,
     });
   }
 
@@ -443,6 +453,13 @@ class WsService extends ChangeNotifier {
           break;
         case 'LLM_CONFIG_RESPONSE':
         case 'APP_STATUS_RESPONSE':
+        case 'MEMORY_LIST_RESPONSE':
+        case 'MEMORY_ADD_RESPONSE':
+        case 'MEMORY_DELETE_RESPONSE':
+        case 'MEMORY_CLEAR_RESPONSE':
+        case 'SKILL_LIST_RESPONSE':
+        case 'SKILL_INSTALL_RESPONSE':
+        case 'SKILL_UNINSTALL_RESPONSE':
           // 已由 _handlePendingResponse 消费
           break;
         default:
@@ -967,6 +984,84 @@ class WsService extends ChangeNotifier {
       _pendingResponses.remove(msgId);
       return null;
     }
+  }
+
+  // ── 记忆系统 API ───────────────────────────────────────────────────────
+
+  /// 获取指定人格的记忆列表
+  Future<List<Map<String, dynamic>>> getMemories({
+    String? personaId,
+    String? category,
+  }) async {
+    final payload = <String, dynamic>{
+      'persona_id': personaId ?? _activePersonaId,
+    };
+    if (category != null) {
+      payload['category'] = category;
+    }
+    final resp = await sendRequest('MEMORY_LIST', payload);
+    if (resp == null) return [];
+    final list = resp['payload']?['memories'] as List<dynamic>? ?? [];
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// 手动录入一条记忆
+  Future<bool> addMemory({
+    String? personaId,
+    required String category,
+    required String content,
+  }) async {
+    final resp = await sendRequest('MEMORY_ADD', {
+      'persona_id': personaId ?? _activePersonaId,
+      'category': category,
+      'content': content.trim(),
+    });
+    return resp?['payload']?['status'] == 'success';
+  }
+
+  /// 删除指定记忆
+  Future<bool> deleteMemory(dynamic memoryId) async {
+    final resp = await sendRequest('MEMORY_DELETE', {
+      'memory_id': memoryId,
+    });
+    return resp?['payload']?['status'] == 'success';
+  }
+
+  /// 清空当前人格的所有记忆
+  Future<int> clearMemories([String? personaId]) async {
+    final resp = await sendRequest('MEMORY_CLEAR', {
+      'persona_id': personaId ?? _activePersonaId,
+    });
+    if (resp?['payload']?['status'] == 'success') {
+      return (resp!['payload']['cleared_count'] as num?)?.toInt() ?? 0;
+    }
+    return 0;
+  }
+
+  // ── 技能系统 API ───────────────────────────────────────────────────────
+
+  /// 获取已安装的技能列表
+  Future<List<Map<String, dynamic>>> getSkills() async {
+    final resp = await sendRequest('SKILL_LIST', {});
+    if (resp == null) return [];
+    final list = resp['payload']?['skills'] as List<dynamic>? ?? [];
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// 从 Git 仓库安装技能
+  Future<bool> installSkill(String gitUrl) async {
+    final resp = await sendRequest('SKILL_INSTALL', {
+      'git_url': gitUrl.trim(),
+    }, timeout: const Duration(seconds: 45));
+    return resp?['payload']?['status'] == 'success';
+  }
+
+  /// 卸载指定技能
+  Future<bool> uninstallSkill(String skillName) async {
+    final resp = await sendRequest('SKILL_UNINSTALL', {
+      'skill_name': skillName.trim(),
+    });
+    return resp?['payload']?['status'] == 'success';
   }
 
   void _setStatus(WsStatus s) {

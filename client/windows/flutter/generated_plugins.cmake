@@ -8,6 +8,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   just_audio_windows
   screen_retriever_windows
   tray_manager
+  webview_windows
   window_manager
 )
 

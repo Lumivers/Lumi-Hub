@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Lumi Live2D Viewer</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent !important;
+    }
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas {
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+      background: transparent !important;
+    }
+  </style>
+
+  <!-- Live2D Cubism Core & PixiJS Bundle -->
+  <script src="libs/live2dcubismcore.min.js"></script>
+  <script src="libs/live2d.min.js"></script>
+  <script src="libs/pixi.min.js"></script>
+  <script src="libs/index.min.js"></script>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="live2d-canvas"></canvas>
+  </div>
+
+  <script>
+    const { Application } = PIXI;
+    const { Live2DModel } = PIXI.live2d;
+
+    let app = null;
+    let currentModel = null;
+    let targetMouthY = 0;
+    let currentMouthY = 0;
+
+    // 初始化 Pixi 应用
+    function initPixi() {
+      const canvas = document.getElementById('live2d-canvas');
+      app = new Application({
+        view: canvas,
+        autoStart: true,
+        resizeTo: window,
+        backgroundAlpha: 0,
+        transparent: true,
+        antialias: true,
+        resolution: window.devicePixelRatio || 1,
+      });
+
+      // 口型平滑插值 Tick
+      app.ticker.add(() => {
+        if (currentModel && currentModel.internalModel && currentModel.internalModel.coreModel) {
+          // 平滑口型张开
+          currentMouthY += (targetMouthY - currentMouthY) * 0.4;
+          try {
+            // Cubism 3/4 参数
+            currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', currentMouthY);
+            // Cubism 2 参数兼容
+            currentModel.internalModel.coreModel.setParamFloat?.('PARAM_MOUTH_OPEN_Y', currentMouthY);
+          } catch (e) {}
+        }
+      });
+    }
+
+    // 加载指定路径的 Live2D 模型
+    async function loadModel(modelPath) {
+      if (!app) initPixi();
+
+      try {
+        if (currentModel) {
+          app.stage.removeChild(currentModel);
+          currentModel.destroy();
+          currentModel = null;
+        }
+
+        console.log('[Live2D] 开始加载模型:', modelPath);
+        const model = await Live2DModel.from(modelPath, {
+          autoInteract: true,
+        });
+
+        currentModel = model;
+        app.stage.addChild(model);
+
+        // 调整位置与缩放比例适应画布
+        resizeModel();
+
+        // 绑定点击事件触发动作
+        model.on('hit', (hitAreas) => {
+          console.log('[Live2D] 点击区域:', hitAreas);
+          if (hitAreas.includes('head') || hitAreas.includes('Head')) {
+            model.motion('Tap');
+          } else if (hitAreas.includes('body') || hitAreas.includes('Body')) {
+            model.motion('Tap');
+          } else {
+            model.motion('Tap');
+          }
+        });
+
+        // 通知宿主加载完成
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'MODEL_LOADED', path: modelPath });
+        }
+        console.log('[Live2D] 模型加载成功！');
+      } catch (err) {
+        console.error('[Live2D] 模型加载失败:', err);
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage({ type: 'MODEL_ERROR', error: String(err) });
+        }
+      }
+    }
+
+    // 自适应模型缩放与居中（以头部与全身黄金分割比例呈现）
+    function resizeModel() {
+      if (!currentModel || !app) return;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      // 先重置 scale 避免二次 resize 时宽高错误累乘
+      currentModel.scale.set(1.0);
+      const originalWidth = currentModel.width || 2000;
+      const originalHeight = currentModel.height || 3000;
+
+      // 缩放适应视窗，优先完整展示头部、上半身与全身
+      const scaleX = (width * 0.88) / originalWidth;
+      const scaleY = (height * 0.84) / originalHeight;
+      const scale = Math.min(scaleX, scaleY);
+      currentModel.scale.set(scale);
+
+      // 锚点定在头部上方 (0.5, 0.02)，保证头部永远在上方且清晰可见
+      currentModel.anchor.set(0.5, 0.02);
+      currentModel.x = width / 2;
+      currentModel.y = height * 0.08;
+    }
+
+    window.addEventListener('resize', resizeModel);
+
+    // ─── 暴露给 Flutter 的控制 API ──────────────────────────────────────────
+
+    // 1. 设置口型张合度 (0.0 ~ 1.0)
+    window.setLive2DLipSync = function(volume) {
+      targetMouthY = Math.max(0, Math.min(1, volume));
+    };
+
+    // 2. 播放指定动作 (例如 'Idle', 'Tap')
+    window.playLive2DMotion = function(group, index = 0) {
+      if (currentModel) {
+        currentModel.motion(group, index);
+      }
+    };
+
+    // 3. 切换表情
+    window.setLive2DExpression = function(expName) {
+      if (currentModel) {
+        currentModel.expression(expName);
+      }
+    };
+
+    // 4. 加载指定模型
+    window.loadLive2DModel = function(url) {
+      loadModel(url);
+    };
+
+    // 页面就绪后默认加载内置模型
+    window.addEventListener('DOMContentLoaded', () => {
+      initPixi();
+      // 默认加载 Haru 模型
+      loadModel('models/default/haru_greeter_t03.model3.json');
+    });
+  </script>
+</body>
+</html>

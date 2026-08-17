@@ -6,7 +6,9 @@ import '../services/resource_package_service.dart';
 import '../theme/app_theme.dart';
 
 class ResourcePackageScreen extends StatefulWidget {
-  const ResourcePackageScreen({super.key});
+  final bool embedded;
+
+  const ResourcePackageScreen({super.key, this.embedded = false});
 
   @override
   State<ResourcePackageScreen> createState() => _ResourcePackageScreenState();
@@ -189,17 +191,11 @@ class _ResourcePackageScreenState extends State<ResourcePackageScreen> {
       borderSide: BorderSide(color: colors.accent, width: 1.4),
     );
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        backgroundColor: colors.sidebar,
-        title: const Text('可扩展资源包'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Container(
-            decoration: BoxDecoration(
+    final body = ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Container(
+          decoration: BoxDecoration(
               color: colors.inputBg,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: colors.divider.withValues(alpha: 0.2)),
@@ -469,7 +465,19 @@ class _ResourcePackageScreenState extends State<ResourcePackageScreen> {
               child: Center(child: CircularProgressIndicator()),
             ),
         ],
+      );
+
+    if (widget.embedded) {
+      return body;
+    }
+
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      appBar: AppBar(
+        backgroundColor: colors.sidebar,
+        title: const Text('可扩展资源包'),
       ),
+      body: body,
     );
   }
 }

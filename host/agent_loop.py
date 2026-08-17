@@ -37,6 +37,7 @@ class AgentLoop:
         mcp_manager=None,
         memory_manager=None,
         agent_prompt: str = "",
+        skill_prompt: str = "",
         msg_id: str = "",
         session_id: str = "default",
     ):
@@ -52,6 +53,7 @@ class AgentLoop:
         self.mcp_manager = mcp_manager
         self.memory_manager = memory_manager
         self.agent_prompt = agent_prompt
+        self.skill_prompt = skill_prompt
         self.msg_id = msg_id or str(uuid.uuid4())[:8]
         self.session_id = session_id
 
@@ -77,8 +79,18 @@ class AgentLoop:
         5. 发送 CHAT_RESPONSE_END 解锁前端
         """
         try:
+            # 检索与当前消息相关的记忆
+            relevant_memories = []
+            if self.memory_manager and self.user_id:
+                try:
+                    relevant_memories = await self.memory_manager.retrieve_relevant(
+                        self.user_id, self.persona_id, user_message, top_k=5
+                    )
+                except Exception as e:
+                    logger.warning(f"[AgentLoop] 检索记忆失败: {e}")
+
             # 构建 system prompt
-            system_prompt = self._build_system_prompt()
+            system_prompt = self._build_system_prompt(relevant_memories)
 
             # 构建 messages 数组
             messages = self._build_messages(system_prompt, user_message, attachments)
@@ -201,11 +213,18 @@ class AgentLoop:
             await self._send_error(f"Agent 运行异常: {e}")
             await self._send_chat_end()
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, relevant_memories: list[dict] = None) -> str:
         """构建 system prompt。"""
         prompt = self.persona_system_prompt
         if self.agent_prompt:
             prompt += "\n\n" + self.agent_prompt
+        if self.skill_prompt:
+            prompt += "\n\n### ACTIVE_SKILL_WORKFLOW ###\n" + self.skill_prompt
+        if relevant_memories:
+            mem_text = "\n[关于该用户的长期记忆与偏好]\n" + "\n".join(
+                f"- [{m['category']}] {m['content']}" for m in relevant_memories
+            )
+            prompt += "\n\n" + mem_text
         return prompt
 
     def _build_messages(

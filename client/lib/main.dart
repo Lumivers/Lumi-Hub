@@ -33,6 +33,7 @@ void main() async {
     WindowOptions windowOptions = WindowOptions(
       size: initialSize,
       center: true,
+      backgroundColor: Colors.transparent,
       title: 'Lumi Hub',
     );
     windowManager.waitUntilReadyToShow(windowOptions, () async {

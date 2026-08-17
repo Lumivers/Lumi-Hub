@@ -15,15 +15,14 @@ import 'package:markdown/markdown.dart' as md;
 
 import '../models/message.dart';
 import '../services/app_settings.dart';
-import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/live2d_view.dart';
 import 'components/approval_dialog.dart';
-import 'mcp_settings_screen.dart';
-import 'resource_package_screen.dart';
-import 'voice_settings_screen.dart';
-import 'unity_launch_screen.dart';
-import 'llm_settings_screen.dart';
+import 'live2d_companion_screen.dart';
+import 'memory_screen.dart';
+import 'skill_screen.dart';
+import 'settings_hub_dialog.dart';
 
 part 'chat_screen_sidebar.dart';
 part 'chat_screen_sidebar_widgets.dart';
@@ -45,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> {
   VoidCallback? _wsListener;
 
   bool _isSelectionMode = false;
+  bool _showLive2dPanel = false;
   bool _loadingOlder = false;
   bool _pendingInitialBottom = true;
   bool _bottomJumpScheduled = false;
@@ -570,8 +570,9 @@ class _ChatScreenState extends State<ChatScreen> {
             onOpenSidebar: isCompact
                 ? () => Scaffold.of(scaffoldContext).openDrawer()
                 : null,
-            onLaunchUnity:
-                isCompact ? () => UnityLaunchScreen.open(context) : null,
+            onToggleLive2d: () => setState(() => _showLive2dPanel = !_showLive2dPanel),
+            isLive2dOpen: _showLive2dPanel,
+            onOpenCompanion: () => Live2dCompanionScreen.open(context),
           ),
         ),
         Divider(height: 1, color: colors.divider),
@@ -760,8 +761,101 @@ class _ChatScreenState extends State<ChatScreen> {
                 _Sidebar(colors: colors, ws: ws),
                 VerticalDivider(width: 1, color: colors.divider),
                 Expanded(child: chatMain),
+                if (_showLive2dPanel) ...[
+                  VerticalDivider(width: 1, color: colors.divider),
+                  _Live2dSidebarStage(
+                    colors: colors,
+                    ws: ws,
+                    onClose: () => setState(() => _showLive2dPanel = false),
+                    onOpenCompanion: () => Live2dCompanionScreen.open(context),
+                  ),
+                ],
               ],
             ),
+    );
+  }
+}
+
+// ─── 右侧 Live2D 嵌入展示舞台 ──────────────────────────────────────────────────
+
+class _Live2dSidebarStage extends StatelessWidget {
+  final LumiColors colors;
+  final WsService ws;
+  final VoidCallback onClose;
+  final VoidCallback onOpenCompanion;
+
+  const _Live2dSidebarStage({
+    required this.colors,
+    required this.ws,
+    required this.onClose,
+    required this.onOpenCompanion,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final activePersona = ws.activePersonaId.isNotEmpty ? ws.activePersonaId : 'Lumi AI';
+
+    return Container(
+      width: 320,
+      color: colors.sidebar,
+      child: Column(
+        children: [
+          // 顶部小标题栏
+          Container(
+            height: 56,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            alignment: Alignment.centerLeft,
+            child: Row(
+              children: [
+                Icon(Icons.face_retouching_natural, size: 20, color: colors.accent),
+                const SizedBox(width: 8),
+                Text(
+                  activePersona,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.open_in_new, size: 18),
+                  tooltip: '切换为独立桌宠挂件模式',
+                  color: colors.subtext,
+                  onPressed: onOpenCompanion,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  tooltip: '收起角色展台',
+                  color: colors.subtext,
+                  onPressed: onClose,
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: colors.divider),
+
+          // Live2D 交互展示区
+          const Expanded(
+            child: Live2dView(),
+          ),
+          Divider(height: 1, color: colors.divider),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.mouse, size: 14, color: colors.subtext),
+                const SizedBox(width: 6),
+                Text(
+                  '鼠标移动跟随视线 · 点击角色互动',
+                  style: TextStyle(fontSize: 11, color: colors.subtext),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

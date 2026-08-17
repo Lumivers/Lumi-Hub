@@ -57,12 +57,61 @@ class LumiWSServer:
         """注册断连回调。handler(session_id)"""
         self._disconnect_handler = handler
 
+    async def _process_http_request(self, connection, request):
+        """处理针对 /live2d/ 等静态资源的 HTTP 请求，其余交由 WebSocket 握手。"""
+        from websockets.http11 import Response
+        from websockets.datastructures import Headers
+
+        headers = getattr(request, "headers", None)
+        upgrade = headers.get("Upgrade", "") if headers else ""
+        if upgrade.lower() == "websocket":
+            return None  # 继续走 WebSocket 握手升级流程
+
+        # 纯 HTTP 请求处理
+        path = getattr(request, "path", "")
+        clean_path = path.split("?")[0] if isinstance(path, str) else ""
+
+        if clean_path.startswith("/live2d/"):
+            rel_path = clean_path[len("/live2d/"):]
+            base_dir = os.path.normpath(
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), "client", "assets", "live2d")
+            )
+            file_path = os.path.normpath(os.path.join(base_dir, rel_path))
+            if not file_path.startswith(base_dir):
+                return Response(403, "Forbidden", Headers([("Content-Type", "text/plain")]), b"Forbidden")
+            if os.path.isfile(file_path):
+                import mimetypes
+                mime, _ = mimetypes.guess_type(file_path)
+                if file_path.endswith(".moc3") or file_path.endswith(".moc"):
+                    mime = "application/octet-stream"
+                elif file_path.endswith(".json"):
+                    mime = "application/json"
+                elif not mime:
+                    mime = "application/octet-stream"
+
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                resp_headers = Headers([
+                    ("Content-Type", mime),
+                    ("Content-Length", str(len(content))),
+                    ("Access-Control-Allow-Origin", "*"),
+                    ("Access-Control-Allow-Methods", "GET, OPTIONS"),
+                ])
+                return Response(200, "OK", resp_headers, content)
+            return Response(404, "Not Found", Headers([("Content-Type", "text/plain")]), b"Not Found")
+
+        if clean_path == "/favicon.ico":
+            return Response(204, "No Content", Headers([]), b"")
+
+        return Response(200, "OK", Headers([("Content-Type", "application/json")]), b'{"status":"ok"}')
+
     async def start(self):
         """启动 WebSocket 服务端。"""
         self.server = await websockets.serve(
             self._handle_connection,
             self.host,
             self.port,
+            process_request=self._process_http_request,
             ping_interval=20,
             ping_timeout=10,
         )
