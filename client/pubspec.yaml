@@ -44,7 +44,6 @@ dependencies:
   just_audio_windows: ^0.2.3
   audioplayers: ^6.6.0
   archive: ^4.0.9
-  flutter_unity_widget: ^2022.2.1
   webview_windows: ^0.4.0
 
 dev_dependencies:

@@ -24,5 +24,3 @@ plugins {
 }
 
 include(":app")
-include(":unityLibrary")
-project(":unityLibrary").projectDir = java.io.File(settingsDir, "unityLibrary")

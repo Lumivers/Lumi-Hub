@@ -44,5 +44,3 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Unity Export
-/android/unityLibrary/
