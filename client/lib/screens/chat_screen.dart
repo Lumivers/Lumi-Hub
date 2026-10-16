@@ -18,6 +18,7 @@ import '../services/app_settings.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/live2d_view.dart';
+import '../widgets/trace_timeline_widget.dart';
 import 'components/approval_dialog.dart';
 import 'live2d_companion_screen.dart';
 import 'memory_screen.dart';

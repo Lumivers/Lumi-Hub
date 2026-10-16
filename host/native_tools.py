@@ -1,7 +1,7 @@
 import os
 import shutil
 import time
-
+import asyncio
 import logging
 logger = logging.getLogger("lumi")
 
@@ -219,3 +219,62 @@ def get_file_size(path: str) -> str:
         return f"File '{os.path.basename(path)}' size: {size} bytes ({size / 1024:.2f} KB, {size / 1024 / 1024:.2f} MB)"
     except Exception as e:
         return f"Error getting file size: {e}"
+
+
+async def run_command(command: str, cwd: str = None, timeout: int = 60) -> str:
+    """在指定工作目录下执行 Shell 命令，捕获 stdout、stderr 及退出状态码。"""
+    try:
+        working_dir = cwd if (cwd and os.path.exists(cwd)) else os.getcwd()
+
+        # 安全防御：禁止可能导致严重破坏或系统挂起的极端危险命令
+        forbidden = ["rm -rf /", "mkfs", ":(){ :|:& };:"]
+        for f in forbidden:
+            if f in command:
+                return f"Error: Command '{command}' contains forbidden destructive pattern."
+
+        logger.info(f"[Lumi-Hub run_command] Executing in {working_dir}: {command}")
+
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir,
+        )
+
+        try:
+            stdout_data, stderr_data = await asyncio.wait_for(
+                process.communicate(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return f"Error: Command timed out after {timeout} seconds."
+
+        stdout_str = stdout_data.decode("utf-8", errors="replace").strip()
+        stderr_str = stderr_data.decode("utf-8", errors="replace").strip()
+        exit_code = process.returncode
+
+        output_parts = [f"[Exit Code] {exit_code}"]
+        if stdout_str:
+            if len(stdout_str) > 8000:
+                truncated = stdout_str[:4000] + f"\n... [输出过长，中间省略 {len(stdout_str)-8000} 字符] ...\n" + stdout_str[-4000:]
+                output_parts.append(f"[Stdout]\n{truncated}")
+            else:
+                output_parts.append(f"[Stdout]\n{stdout_str}")
+
+        if stderr_str:
+            if len(stderr_str) > 4000:
+                truncated = stderr_str[:2000] + f"\n... [错误输出过长，中间省略 {len(stderr_str)-4000} 字符] ...\n" + stderr_str[-2000:]
+                output_parts.append(f"[Stderr]\n{truncated}")
+            else:
+                output_parts.append(f"[Stderr]\n{stderr_str}")
+
+        if not stdout_str and not stderr_str:
+            output_parts.append("[Output] (No output)")
+
+        return "\n".join(output_parts)
+    except Exception as e:
+        return f"Error executing command: {e}"
+

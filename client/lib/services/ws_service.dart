@@ -76,6 +76,7 @@ class WsService extends ChangeNotifier {
   bool get isGenerating => _isGenerating;
   Timer? _generationUnlockTimer;
   final Set<String> _streamingMsgIds = <String>{};
+  final Map<String, List<Map<String, dynamic>>> _traceCache = {};
   final Map<String, Completer<Map<String, dynamic>>> _pendingResponses = {};
   final Map<String, int> _historyRequestOffsets = <String, int>{};
   final Map<String, Completer<void>> _historyRequestCompleters =
@@ -353,6 +354,7 @@ class WsService extends ChangeNotifier {
       sender: MessageSender.ai,
       time: now,
       isTyping: true,
+      extra: {'traces': _traceCache.putIfAbsent(requestId, () => <Map<String, dynamic>>[])},
     );
     _messages.add(placeholder);
     _isGenerating = true;
@@ -403,6 +405,12 @@ class WsService extends ChangeNotifier {
           _isGenerating = false;
           _generationUnlockTimer?.cancel();
           notifyListeners();
+          break;
+        case 'TRACE_STEP_UPDATE':
+          _handleTraceStepUpdate(data);
+          break;
+        case 'TRACE_SUMMARY':
+          _handleTraceSummary(data);
           break;
         case 'PONG':
           // 心跳回应，忽略
@@ -492,9 +500,15 @@ class WsService extends ChangeNotifier {
           ? content
           : _mergeAssistantContent(existing.content, content);
 
+      final currentExtra = Map<String, dynamic>.from(existing.extra ?? {});
+      if (_traceCache.containsKey(msgId)) {
+        currentExtra['traces'] = List<Map<String, dynamic>>.from(_traceCache[msgId]!);
+      }
+
       _messages[existingIndex] = existing.copyWith(
         content: nextContent,
         isTyping: false,
+        extra: currentExtra,
       );
       if (isFromStreaming) {
         _streamingMsgIds.remove(msgId);
@@ -511,6 +525,7 @@ class WsService extends ChangeNotifier {
         content: content,
         sender: MessageSender.ai,
         time: DateTime.now(),
+        extra: {'traces': List<Map<String, dynamic>>.from(_traceCache[msgId] ?? [])},
       ),
     );
 
@@ -550,17 +565,71 @@ class WsService extends ChangeNotifier {
           content: chunk,
           sender: MessageSender.ai,
           time: DateTime.now(),
+          extra: {'traces': List<Map<String, dynamic>>.from(_traceCache[msgId] ?? [])},
         ),
       );
     } else {
       final existing = _messages[existingIndex];
+      final currentExtra = Map<String, dynamic>.from(existing.extra ?? {});
+      if (_traceCache.containsKey(msgId)) {
+        currentExtra['traces'] = List<Map<String, dynamic>>.from(_traceCache[msgId]!);
+      }
       _messages[existingIndex] = existing.copyWith(
         content: _mergeAssistantContent(existing.content, chunk),
         isTyping: false,
+        extra: currentExtra,
       );
     }
 
     notifyListeners();
+  }
+
+  void _handleTraceStepUpdate(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final msgId = data['message_id'] as String? ?? '';
+    if (msgId.isEmpty) return;
+
+    final stepId = payload['step_id'];
+    final traceList = _traceCache.putIfAbsent(msgId, () => <Map<String, dynamic>>[]);
+    final existingStepIdx = traceList.indexWhere((s) => s['step_id'] == stepId);
+    if (existingStepIdx != -1) {
+      traceList[existingStepIdx] = payload;
+    } else {
+      traceList.add(payload);
+    }
+
+    final assistantId = _assistantMsgId(msgId);
+    final typingId = '${msgId}_typing';
+
+    // 优先尝试查找助手消息或正在输入的占位
+    int targetIdx = _messages.indexWhere((m) => m.id == assistantId);
+    if (targetIdx == -1) {
+      targetIdx = _messages.indexWhere((m) => m.id == typingId);
+    }
+
+    if (targetIdx != -1) {
+      final msg = _messages[targetIdx];
+      final currentExtra = Map<String, dynamic>.from(msg.extra ?? {});
+      currentExtra['traces'] = List<Map<String, dynamic>>.from(traceList);
+      _messages[targetIdx] = msg.copyWith(extra: currentExtra);
+      notifyListeners();
+    }
+  }
+
+  void _handleTraceSummary(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final msgId = data['message_id'] as String? ?? '';
+    if (msgId.isEmpty) return;
+
+    final assistantId = _assistantMsgId(msgId);
+    final targetIdx = _messages.indexWhere((m) => m.id == assistantId);
+    if (targetIdx != -1) {
+      final msg = _messages[targetIdx];
+      final currentExtra = Map<String, dynamic>.from(msg.extra ?? {});
+      currentExtra['trace_summary'] = payload;
+      _messages[targetIdx] = msg.copyWith(extra: currentExtra);
+      notifyListeners();
+    }
   }
 
   Future<void> _handleAuthResponse(Map<String, dynamic> data) async {

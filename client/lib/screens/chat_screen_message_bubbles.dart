@@ -214,7 +214,25 @@ class _BubbleItemState extends State<_BubbleItem> {
   }
 
   Widget _buildBubbleContent(Color textColor) {
+    final traces = (widget.msg.extra?['traces'] as List?)
+        ?.whereType<Map<String, dynamic>>()
+        .toList();
+
     if (widget.msg.isTyping) {
+      if (traces != null && traces.isNotEmpty) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TraceTimelineWidget(
+              traces: traces,
+              colors: widget.colors,
+              isGenerating: true,
+            ),
+            _TypingIndicator(color: textColor),
+          ],
+        );
+      }
       return _TypingIndicator(color: textColor);
     }
 
@@ -261,8 +279,15 @@ class _BubbleItemState extends State<_BubbleItem> {
     }
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
+        if (traces != null && traces.isNotEmpty)
+          TraceTimelineWidget(
+            traces: traces,
+            colors: widget.colors,
+            isGenerating: false,
+          ),
         MarkdownBody(
           data: widget.msg.content,
           // 文本选择统一交给列表层 SelectionArea，避免嵌套选择器造成跨空格/跨气泡拖选异常。

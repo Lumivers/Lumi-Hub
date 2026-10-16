@@ -9,6 +9,7 @@ import uuid
 import time
 import logging
 from typing import Optional, Callable
+from .trace_collector import TraceCollector, StepTrace
 
 logger = logging.getLogger("lumi")
 
@@ -57,6 +58,9 @@ class AgentLoop:
         self.msg_id = msg_id or str(uuid.uuid4())[:8]
         self.session_id = session_id
 
+        # 任务 Trace 收集器
+        self.trace_collector = TraceCollector(session_id=self.session_id, msg_id=self.msg_id)
+
         # 是否被取消
         self._cancelled = False
 
@@ -104,13 +108,16 @@ class AgentLoop:
                     logger.info(f"[AgentLoop] Agent 已被取消 (session={self.session_id})")
                     break
 
+                # 准备送入 LLM 的 messages (进行过桥抽板剪枝)
+                prepared_messages = self._compact_messages(messages, keep_recent_tools=2)
+
                 # 调用 LLM
                 full_text = ""
                 tool_calls = None
                 text_started = False
 
                 async for event in self.llm.chat_stream(
-                    messages=messages,
+                    messages=prepared_messages,
                     tools=tool_schemas if tool_schemas else None,
                 ):
                     if self._cancelled:
@@ -162,21 +169,42 @@ class AgentLoop:
                         tool_args = tc["arguments"]
                         tool_call_id = tc["id"]
 
-                        # 通知客户端工具调用开始
+                        # 1. 记录并通知 Step 启动
+                        step = self.trace_collector.start_step(tool_name, tool_args)
+                        await self._send_trace_step_update(step)
                         await self._send_tool_call_start(tool_name, tool_args)
 
-                        # 执行工具
+                        # 2. 执行工具
                         result = await self.tools.execute(
                             name=tool_name,
                             arguments=tool_args,
                             auth_callback=self.wait_for_auth,
                         )
 
-                        # 通知客户端工具调用结果
-                        success = not result.startswith("Error:")
-                        await self._send_tool_call_result(tool_name, success, result[:200])
+                        # 3. 捕获 exit code (针对 run_command 等工具)
+                        exit_code = None
+                        if "[Exit Code]" in result:
+                            try:
+                                for line in result.splitlines():
+                                    if line.startswith("[Exit Code]"):
+                                        exit_code = int(line.split("]")[1].strip())
+                                        break
+                            except Exception:
+                                pass
 
-                        # 将工具结果回填到 messages
+                        success = not result.startswith("Error:") and (exit_code is None or exit_code == 0)
+
+                        # 4. 记录并通知 Step 完成
+                        step.finish(
+                            success=success,
+                            output=result,
+                            exit_code=exit_code,
+                            error=None if success else (result[:200] if result else "Execution failed"),
+                        )
+                        await self._send_trace_step_update(step)
+                        await self._send_tool_call_result(tool_name, success, step.output_summary)
+
+                        # 将工具结果回填到 messages (保持未经裁剪的完整输出，供下一轮即时消费)
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
@@ -204,6 +232,9 @@ class AgentLoop:
                         )
 
                     break
+
+            # 发送 Trace 完整汇总
+            await self._send_trace_summary()
 
             # 发送结束信号
             await self._send_chat_end()
@@ -303,6 +334,59 @@ class AgentLoop:
             },
         }
         await self.ws_server.send_to_client(self.ws_session_id, msg)
+
+    async def _send_trace_step_update(self, step: StepTrace):
+        """通知客户端 Step Trace 状态更新。"""
+        msg = {
+            "message_id": self.msg_id,
+            "type": "TRACE_STEP_UPDATE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": step.to_dict(),
+        }
+        await self.ws_server.send_to_client(self.ws_session_id, msg)
+
+    async def _send_trace_summary(self):
+        """通知客户端本次对话的完整 Trace 汇总。"""
+        summary = self.trace_collector.export_summary()
+        if summary.get("step_count", 0) > 0:
+            msg = {
+                "message_id": self.msg_id,
+                "type": "TRACE_SUMMARY",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": summary,
+            }
+            await self.ws_server.send_to_client(self.ws_session_id, msg)
+
+    def _compact_messages(self, messages: list[dict], keep_recent_tools: int = 2) -> list[dict]:
+        """Observation Compaction (过桥抽板):
+        对历史消息中过早的 tool observation 进行剪枝压缩，避免上下文与 Token 膨胀。
+        仅保留最近 keep_recent_tools 次工具调用的完整输出，更早的输出若超过 300 字符则折叠成摘要。
+        """
+        compacted = []
+        tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        uncompressed_indices = set(tool_indices[-keep_recent_tools:]) if tool_indices else set()
+
+        for idx, msg in enumerate(messages):
+            if msg.get("role") == "tool" and idx not in uncompressed_indices:
+                content = msg.get("content", "")
+                if len(content) > 300:
+                    lines = content.strip().splitlines()
+                    summary_head = lines[0] if lines else ""
+                    summary_tail = lines[-1] if len(lines) > 1 else ""
+                    pruned_content = (
+                        f"[Observation Pruned (Context Compaction)]\n"
+                        f"Original output was {len(content)} chars ({len(lines)} lines).\n"
+                        f"Summary Head: {summary_head[:120]}\n"
+                        f"Summary Tail: {summary_tail[:120]}"
+                    )
+                    compacted.append({**msg, "content": pruned_content})
+                    continue
+            compacted.append(msg)
+        return compacted
 
     async def _send_chat_end(self):
         """发送 CHAT_RESPONSE_END 解锁前端。"""

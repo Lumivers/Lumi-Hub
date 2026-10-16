@@ -147,7 +147,7 @@ class ToolRegistry:
             if tool.requires_auth and auth_callback:
                 approved = await auth_callback(
                     action_type=tool.auth_action_type,
-                    target_path=arguments.get("path", ""),
+                    target_path=arguments.get("path") or arguments.get("cwd") or arguments.get("command", "")[:80],
                     description=f"执行工具: {name}",
                     tool_name=name,
                     diff_preview=json.dumps(arguments, indent=2, ensure_ascii=False)[:500],

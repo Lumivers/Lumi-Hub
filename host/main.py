@@ -39,6 +39,7 @@ from .native_tools import (
     list_dir as native_list_dir,
     get_file_size as native_get_file_size,
     replace_content as native_replace_content,
+    run_command as native_run_command,
 )
 from .handlers import (
     AuthHandlersMixin,
@@ -308,6 +309,20 @@ class LumiHubApp(
         )
         def get_file_size(path: str) -> str:
             return native_get_file_size(path)
+
+        @registry.register(
+            name="run_command",
+            description="【高危操作】在本地系统执行 Shell 命令行（如 git, python, flutter, cmake, pytest, ls 等）。捕获 exit code、stdout 和 stderr。",
+            parameters={
+                "command": {"type": "string", "description": "要执行的 Shell 命令行语句"},
+                "cwd": {"type": "string", "description": "执行命令的工作目录绝对路径（可选，默认为当前工程根目录）", "default": ""},
+                "timeout": {"type": "integer", "description": "命令超时秒数，默认为 60 秒", "default": 60},
+            },
+            requires_auth=True,
+            auth_action_type="COMMAND_RUN",
+        )
+        async def run_command(command: str, cwd: str = "", timeout: int = 60) -> str:
+            return await native_run_command(command=command, cwd=cwd or None, timeout=timeout)
 
         logger.info(f"[Lumi-Hub] 已注册 {len(self.tool_registry.list_tools())} 个原生工具")
 
