@@ -20,7 +20,6 @@ import '../theme/app_theme.dart';
 import '../widgets/live2d_view.dart';
 import '../widgets/trace_timeline_widget.dart';
 import 'components/approval_dialog.dart';
-import 'live2d_companion_screen.dart';
 import 'memory_screen.dart';
 import 'skill_screen.dart';
 import 'settings_hub_dialog.dart';
@@ -573,7 +572,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 : null,
             onToggleLive2d: () => setState(() => _showLive2dPanel = !_showLive2dPanel),
             isLive2dOpen: _showLive2dPanel,
-            onOpenCompanion: () => Live2dCompanionScreen.open(context),
           ),
         ),
         Divider(height: 1, color: colors.divider),
@@ -768,7 +766,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     colors: colors,
                     ws: ws,
                     onClose: () => setState(() => _showLive2dPanel = false),
-                    onOpenCompanion: () => Live2dCompanionScreen.open(context),
                   ),
                 ],
               ],
@@ -783,13 +780,11 @@ class _Live2dSidebarStage extends StatelessWidget {
   final LumiColors colors;
   final WsService ws;
   final VoidCallback onClose;
-  final VoidCallback onOpenCompanion;
 
   const _Live2dSidebarStage({
     required this.colors,
     required this.ws,
     required this.onClose,
-    required this.onOpenCompanion,
   });
 
   @override
@@ -819,12 +814,6 @@ class _Live2dSidebarStage extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.open_in_new, size: 18),
-                  tooltip: '切换为独立桌宠挂件模式',
-                  color: colors.subtext,
-                  onPressed: onOpenCompanion,
-                ),
                 IconButton(
                   icon: const Icon(Icons.close, size: 18),
                   tooltip: '收起角色展台',

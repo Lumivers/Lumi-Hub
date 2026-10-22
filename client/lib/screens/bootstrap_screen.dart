@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import 'components/connection_settings_dialog.dart';
 import '../services/app_settings.dart';
 import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
@@ -215,6 +214,42 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   void _copyToClipboard(String text) {
     Clipboard.setData(ClipboardData(text: text));
     _showSnack('已复制到剪贴板');
+  }
+
+  Future<void> _editServerUrl(BuildContext context) async {
+    final ws = context.read<WsService>();
+    final ctrl = TextEditingController(text: ws.serverUrl);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('修改 Host 服务地址'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'WebSocket 地址',
+            hintText: 'ws://127.0.0.1:8765',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final val = ctrl.text.trim();
+              if (val.isNotEmpty) {
+                await ws.setServerUrl(val, reconnectIfConnected: true);
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('保存并重连'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── 构建 UI ──
@@ -478,18 +513,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
-                onPressed: () {
-                  final ws = context.read<WsService>();
-                  final settings = context.read<AppSettings>();
-                  ConnectionSettingsDialog.show(
-                    context,
-                    ws: ws,
-                    settings: settings,
-                    title: '连接设置',
-                    confirmText: '保存并重连',
-                    reconnectIfConnected: true,
-                  );
-                },
+                onPressed: () => _editServerUrl(context),
                 icon: const Icon(Icons.settings_ethernet, size: 16),
                 label: const Text('修改服务器地址'),
               ),
@@ -861,20 +885,6 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
 
     final settings = context.read<AppSettings>();
     await settings.loaded;
-    if (!mounted) return;
-
-    if (settings.askConnectionModeOnLaunch) {
-      await ConnectionSettingsDialog.show(
-        context,
-        ws: context.read<WsService>(),
-        settings: settings,
-        title: '选择连接方式',
-        confirmText: '确认并继续',
-        barrierDismissible: false,
-        allowCancel: false,
-      );
-    }
-
     if (!mounted) return;
     await context.read<BootstrapService>().ensureStarted();
   }

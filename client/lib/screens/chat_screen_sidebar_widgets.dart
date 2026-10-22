@@ -191,7 +191,6 @@ class _TopBar extends StatelessWidget {
   final VoidCallback? onOpenSidebar;
   final VoidCallback? onToggleLive2d;
   final bool isLive2dOpen;
-  final VoidCallback? onOpenCompanion;
 
   const _TopBar({
     required this.colors,
@@ -204,7 +203,6 @@ class _TopBar extends StatelessWidget {
     this.onOpenSidebar,
     this.onToggleLive2d,
     this.isLive2dOpen = false,
-    this.onOpenCompanion,
   });
 
   @override

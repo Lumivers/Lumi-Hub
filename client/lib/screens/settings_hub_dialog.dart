@@ -10,7 +10,6 @@ import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'llm_settings_screen.dart';
 import 'mcp_settings_screen.dart';
-import 'resource_package_screen.dart';
 import 'voice_settings_screen.dart';
 
 /// 统一设置中心对话框 (Settings Hub Dialog)
@@ -61,9 +60,9 @@ class _SettingsHubDialogState extends State<SettingsHubDialog>
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 4,
+      length: 3,
       vsync: this,
-      initialIndex: widget.initialTab.clamp(0, 3),
+      initialIndex: widget.initialTab.clamp(0, 2),
     );
   }
 
@@ -102,7 +101,6 @@ class _SettingsHubDialogState extends State<SettingsHubDialog>
             Tab(icon: Icon(Icons.tune, size: 18), text: '通用设置'),
             Tab(icon: Icon(Icons.smart_toy_outlined, size: 18), text: 'AI 模型'),
             Tab(icon: Icon(Icons.extension_outlined, size: 18), text: 'MCP 扩展'),
-            Tab(icon: Icon(Icons.archive_outlined, size: 18), text: '资源包'),
           ],
         ),
       ),
@@ -112,7 +110,6 @@ class _SettingsHubDialogState extends State<SettingsHubDialog>
           _GeneralSettingsTab(ws: widget.ws, colors: widget.colors),
           const LlmSettingsScreen(embedded: true),
           const McpSettingsScreen(embedded: true),
-          const ResourcePackageScreen(embedded: true),
         ],
       ),
     );
@@ -128,94 +125,6 @@ class _GeneralSettingsTab extends StatelessWidget {
   final LumiColors colors;
 
   const _GeneralSettingsTab({required this.ws, required this.colors});
-
-  bool get _supportsLocalHostLifecycle =>
-      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
-
-  bool _isLocalHostUrl(String raw) {
-    final uri = Uri.tryParse(raw);
-    if (uri == null) return false;
-    final host = uri.host.toLowerCase();
-    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
-  }
-
-  Future<void> _applyConnectionMode(BuildContext context, ConnectionMode mode) async {
-    final settings = context.read<AppSettings>();
-    final currentUrl = ws.serverUrl;
-    String nextUrl = currentUrl;
-    final shouldUseRemote = mode != ConnectionMode.localOrUsb || !_supportsLocalHostLifecycle;
-
-    switch (mode) {
-      case ConnectionMode.localOrUsb:
-        nextUrl = 'ws://127.0.0.1:8765';
-        break;
-      case ConnectionMode.lan:
-        if (_isLocalHostUrl(currentUrl)) nextUrl = 'ws://192.168.1.10:8765';
-        break;
-      case ConnectionMode.publicTunnel:
-        if (_isLocalHostUrl(currentUrl)) nextUrl = 'wss://your-domain.example.com/ws';
-        break;
-    }
-
-    settings.setConnectionMode(mode);
-    settings.setRemoteClientMode(shouldUseRemote);
-    await ws.setServerUrl(nextUrl, reconnectIfConnected: false);
-  }
-
-  Future<void> _showConnectionModeSelector(BuildContext context) async {
-    final settings = context.read<AppSettings>();
-    var selected = settings.connectionMode;
-    final localLabel = _supportsLocalHostLifecycle ? '本机直连 (127.0.0.1)' : 'USB 调试转发 (127.0.0.1)';
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('连接方式'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              RadioListTile<ConnectionMode>(
-                value: ConnectionMode.localOrUsb,
-                groupValue: selected,
-                title: Text(localLabel),
-                subtitle: Text(
-                  _supportsLocalHostLifecycle
-                      ? '在当前电脑本地运行 Host 服务'
-                      : '需 adb reverse tcp:8765 tcp:8765',
-                ),
-                onChanged: (v) => setState(() => selected = v!),
-              ),
-              RadioListTile<ConnectionMode>(
-                value: ConnectionMode.lan,
-                groupValue: selected,
-                title: const Text('局域网'),
-                subtitle: const Text('ws://192.168.x.x:8765'),
-                onChanged: (v) => setState(() => selected = v!),
-              ),
-              RadioListTile<ConnectionMode>(
-                value: ConnectionMode.publicTunnel,
-                groupValue: selected,
-                title: const Text('公网/内网穿透'),
-                subtitle: const Text('wss://your-domain.example.com/ws'),
-                onChanged: (v) => setState(() => selected = v!),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消')),
-            FilledButton(
-              onPressed: () async {
-                await _applyConnectionMode(dialogContext, selected);
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
-              },
-              child: const Text('应用'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Future<void> _showServerUrlEditor(BuildContext context) async {
     final controller = TextEditingController(text: ws.serverUrl);
@@ -349,18 +258,7 @@ class _GeneralSettingsTab extends StatelessWidget {
               ),
               Divider(height: 1, color: colors.divider.withValues(alpha: 0.2), indent: 48),
 
-              // 连接方式
-              ListTile(
-                leading: Icon(Icons.router_outlined, color: colors.subtext, size: 20),
-                title: const Text('连接方式', style: TextStyle(fontSize: 14)),
-                subtitle: Text(
-                  kConnectionModeLabels[settings.connectionMode] ?? '未设置',
-                  style: TextStyle(color: colors.subtext, fontSize: 12),
-                ),
-                trailing: Icon(Icons.edit, color: colors.subtext, size: 16),
-                onTap: () => _showConnectionModeSelector(context),
-              ),
-              Divider(height: 1, color: colors.divider.withValues(alpha: 0.2), indent: 48),
+
 
               // Host 地址
               ListTile(

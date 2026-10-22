@@ -240,11 +240,29 @@ class BootstrapService extends ChangeNotifier {
     int port,
   ) async {
     try {
+      final env = Map<String, String>.from(Platform.environment);
+      if (Platform.isLinux || Platform.isMacOS) {
+        final home = Platform.environment['HOME'] ?? '';
+        final localSites = [
+          '$home/.local/lib/python3.13/site-packages',
+          '$home/.local/lib/python3.12/site-packages',
+          '$home/.local/lib/python3/site-packages',
+        ];
+        final existing = env['PYTHONPATH'] ?? '';
+        final pathsToAdd =
+            localSites.where((p) => Directory(p).existsSync()).toList();
+        if (pathsToAdd.isNotEmpty) {
+          final prefix = pathsToAdd.join(':');
+          env['PYTHONPATH'] = existing.isNotEmpty ? '$prefix:$existing' : prefix;
+        }
+      }
+
       // runInShell: false 保证 Windows 桌面端不会弹黑窗口 cmd
       _hostProcess = await Process.start(
         executable,
         args,
         workingDirectory: workingDirectory,
+        environment: env,
         runInShell: false,
       );
 
@@ -268,7 +286,11 @@ class BootstrapService extends ChangeNotifier {
         }
       });
 
+      bool processExited = false;
+      int? exitCode;
       _hostProcess!.exitCode.then((code) {
+        processExited = true;
+        exitCode = code;
         if (_stage != BootstrapStage.ready && !isReady) {
           _fail('内核服务异常退出，退出码: $code');
         }
@@ -277,6 +299,10 @@ class BootstrapService extends ChangeNotifier {
       // 轮询等待端口真正开放（最多等待 15 秒）
       final stopwatch = Stopwatch()..start();
       while (stopwatch.elapsed < const Duration(seconds: 15)) {
+        if (processExited) {
+          _log('内核服务进程已提前终止 (退出码: $exitCode)', level: LogLevel.error);
+          return false;
+        }
         if (await _isPortOpen('127.0.0.1', port)) {
           _log('内核服务端口 ($port) 监听就绪。');
           return true;
@@ -308,18 +334,24 @@ class BootstrapService extends ChangeNotifier {
   }
 
   Directory? _findProjectRoot() {
-    final candidates = [
-      Directory.current,
-      Directory.current.parent,
-      File(Platform.resolvedExecutable).parent,
-      File(Platform.resolvedExecutable).parent.parent,
-      File(Platform.resolvedExecutable).parent.parent.parent,
-    ];
-    for (final dir in candidates) {
-      final hostMain = File('${dir.path}/host/main.py');
-      if (hostMain.existsSync()) {
-        return dir;
+    Directory current = Directory.current;
+    for (int i = 0; i < 5; i++) {
+      if (File('${current.path}/host/main.py').existsSync()) {
+        return current;
       }
+      final parent = current.parent;
+      if (parent.path == current.path) break;
+      current = parent;
+    }
+
+    current = File(Platform.resolvedExecutable).parent;
+    for (int i = 0; i < 8; i++) {
+      if (File('${current.path}/host/main.py').existsSync()) {
+        return current;
+      }
+      final parent = current.parent;
+      if (parent.path == current.path) break;
+      current = parent;
     }
     return null;
   }
@@ -382,6 +414,7 @@ class BootstrapService extends ChangeNotifier {
   }
 
   void _log(String message, {LogLevel level = LogLevel.info}) {
+    debugPrint('[Bootstrap] $message');
     final entry = LogEntry(DateTime.now(), level, message);
     _logs.add(entry);
     if (_logs.length > 30) {

@@ -5,8 +5,13 @@ from typing import Dict, Any, List
 
 import logging
 logger = logging.getLogger("lumi")
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from mcp.client.session import ClientSession
+try:
+    from mcp.client.stdio import stdio_client, StdioServerParameters
+    from mcp.client.session import ClientSession
+    HAS_MCP = True
+except ImportError:
+    HAS_MCP = False
+    stdio_client = StdioServerParameters = ClientSession = None
 
 
 class LumiMCPManager:
@@ -20,6 +25,10 @@ class LumiMCPManager:
 
     async def initialize(self) -> None:
         """Load configuration and initialize connections to all MCP servers."""
+        if not HAS_MCP:
+            logger.info("[Lumi MCP] 未安装 mcp 依赖库，跳过 MCP 服务器初始化。")
+            return
+
         if not os.path.exists(self.config_path):
             logger.info(f"[Lumi MCP] 配置不存在，跳过 MCP 初始化: {self.config_path}")
             return

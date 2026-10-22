@@ -185,11 +185,6 @@ class _SidebarState extends State<_Sidebar> {
                     ),
                   ),
                 ),
-                IconButton(
-                  icon: Icon(Icons.face_retouching_natural, color: colors.accent),
-                  tooltip: '打开 Live2D 桌宠伴侣',
-                  onPressed: () => Live2dCompanionScreen.open(context),
-                ),
               ],
             ),
           ),
