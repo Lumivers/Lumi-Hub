@@ -6,8 +6,13 @@ import '../services/ws_service.dart';
 /// 技能中心 (Skill Center) 管理页面
 class SkillScreen extends StatefulWidget {
   final bool showAsDialog;
+  final bool embedded;
 
-  const SkillScreen({super.key, this.showAsDialog = false});
+  const SkillScreen({
+    super.key,
+    this.showAsDialog = false,
+    this.embedded = false,
+  });
 
   /// 以模态对话框形式展示技能中心
   static Future<void> show(BuildContext context) {
@@ -289,6 +294,69 @@ class _SkillScreenState extends State<SkillScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final listBody = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : _skills.isEmpty
+            ? _buildEmptyState()
+            : ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _skills.length,
+                itemBuilder: (context, index) {
+                  final skill = _skills[index];
+                  return _buildSkillCard(skill);
+                },
+              );
+
+    if (widget.embedded) {
+      return Scaffold(
+        body: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                border: Border(
+                  bottom: BorderSide(
+                    color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '已注册技能 (${_skills.length})',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 18),
+                    tooltip: '刷新',
+                    onPressed: _loadSkills,
+                    splashRadius: 16,
+                  ),
+                  const SizedBox(width: 4),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.add_rounded, size: 16),
+                    label: const Text('安装技能', style: TextStyle(fontSize: 12)),
+                    onPressed: _showInstallSkillDialog,
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: listBody),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.showAsDialog,
@@ -319,145 +387,138 @@ class _SkillScreenState extends State<SkillScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _skills.isEmpty
-              ? _buildEmptyState()
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _skills.length,
-                  itemBuilder: (context, index) {
-                    final skill = _skills[index];
-                    final name = (skill['name'] ?? '').toString();
-                    final version = (skill['version'] ?? '1.0.0').toString();
-                    final author = (skill['author'] ?? 'Lumi').toString();
-                    final desc = (skill['description'] ?? '').toString();
-                    final icon = (skill['icon'] ?? 'extension').toString();
-                    final requiresTools = skill['requires_tools'] as List<dynamic>? ?? [];
-                    final requiresMcp = skill['requires_mcp'] as List<dynamic>? ?? [];
+      body: listBody,
+    );
+  }
 
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 1.5,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                CircleAvatar(
-                                  radius: 22,
-                                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                                  child: Icon(_getIconData(icon), color: Theme.of(context).colorScheme.onPrimaryContainer),
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Text(
-                                            name,
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              'v$version',
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '作者: $author',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                FilledButton.tonalIcon(
-                                  icon: const Icon(Icons.play_arrow, size: 16),
-                                  label: const Text('运行'),
-                                  onPressed: () => _showRunSkillDialog(skill),
-                                ),
-                                const SizedBox(width: 4),
-                                PopupMenuButton<String>(
-                                  icon: const Icon(Icons.more_vert),
-                                  onSelected: (val) {
-                                    if (val == 'uninstall') {
-                                      _uninstallSkill(name);
-                                    }
-                                  },
-                                  itemBuilder: (ctx) => [
-                                    const PopupMenuItem(
-                                      value: 'uninstall',
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                                          SizedBox(width: 8),
-                                          Text('卸载技能', style: TextStyle(color: Colors.red)),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
+  Widget _buildSkillCard(Map<String, dynamic> skill) {
+    final name = (skill['name'] ?? '').toString();
+    final version = (skill['version'] ?? '1.0.0').toString();
+    final author = (skill['author'] ?? 'Lumi').toString();
+    final desc = (skill['description'] ?? '').toString();
+    final icon = (skill['icon'] ?? 'extension').toString();
+    final requiresTools = skill['requires_tools'] as List<dynamic>? ?? [];
+    final requiresMcp = skill['requires_mcp'] as List<dynamic>? ?? [];
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  child: Icon(_getIconData(icon), color: Theme.of(context).colorScheme.onPrimaryContainer),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            name,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(4),
                             ),
-                            const SizedBox(height: 12),
-                            Text(
-                              desc,
+                            child: Text(
+                              'v$version',
                               style: TextStyle(
-                                fontSize: 13.5,
-                                height: 1.4,
-                                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.85),
+                                fontSize: 11,
+                                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                               ),
                             ),
-                            if (requiresTools.isNotEmpty || requiresMcp.isNotEmpty) ...[
-                              const SizedBox(height: 10),
-                              Wrap(
-                                spacing: 6,
-                                runSpacing: 4,
-                                children: [
-                                  ...requiresTools.map(
-                                    (t) => Chip(
-                                      visualDensity: VisualDensity.compact,
-                                      avatar: const Icon(Icons.build, size: 12),
-                                      label: Text(t.toString(), style: const TextStyle(fontSize: 11)),
-                                    ),
-                                  ),
-                                  ...requiresMcp.map(
-                                    (m) => Chip(
-                                      visualDensity: VisualDensity.compact,
-                                      avatar: const Icon(Icons.hub_outlined, size: 12),
-                                      label: Text('MCP: $m', style: const TextStyle(fontSize: 11)),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '作者: $author',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                         ),
                       ),
-                    );
-                  },
+                    ],
+                  ),
                 ),
+                FilledButton.tonalIcon(
+                  icon: const Icon(Icons.play_arrow, size: 16),
+                  label: const Text('运行'),
+                  onPressed: () => _showRunSkillDialog(skill),
+                ),
+                const SizedBox(width: 4),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (val) {
+                    if (val == 'uninstall') {
+                      _uninstallSkill(name);
+                    }
+                  },
+                  itemBuilder: (ctx) => [
+                    const PopupMenuItem(
+                      value: 'uninstall',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                          SizedBox(width: 8),
+                          Text('卸载技能', style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              desc,
+              style: TextStyle(
+                fontSize: 13.5,
+                height: 1.4,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.85),
+              ),
+            ),
+            if (requiresTools.isNotEmpty || requiresMcp.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  ...requiresTools.map(
+                    (t) => Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(Icons.build, size: 12),
+                      label: Text(t.toString(), style: const TextStyle(fontSize: 11)),
+                    ),
+                  ),
+                  ...requiresMcp.map(
+                    (m) => Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(Icons.hub_outlined, size: 12),
+                      label: Text('MCP: $m', style: const TextStyle(fontSize: 11)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

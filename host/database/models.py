@@ -1,6 +1,5 @@
-import os
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, create_engine, text
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 Base = declarative_base()
@@ -18,15 +17,39 @@ class User(Base):
     # 关联用户的聊天记录与附件。
     messages = relationship("Message", back_populates="user", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="user", cascade="all, delete-orphan")
+    sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(username='{self.username}')>"
+
+
+class Session(Base):
+    """会话表 — 关联工作区与对话历史。"""
+    __tablename__ = 'sessions'
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    # 工作区绝对路径（例如 /home/luser/RiderProjects/Lumi-Hub）
+    workspace_path = Column(String(512), nullable=False, default="", index=True)
+    title = Column(String(255), nullable=False, default="新对话")
+    persona_id = Column(String(50), nullable=False, default="default", server_default="default", index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    user = relationship("User", back_populates="sessions")
+    messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Session(id='{self.id}', title='{self.title}', workspace='{self.workspace_path}')>"
+
 
 class Message(Base):
     __tablename__ = 'messages'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    # 所属会话 ID（如果为空则为向后兼容的老消息）
+    session_id = Column(String(64), ForeignKey('sessions.id'), nullable=True, index=True)
     # role 通常是 'user', 'assistant', 或 'system'
     role = Column(String(20), nullable=False)
     # 消息内容，针对不同 type 这里可以是纯文本，也可以是 JSON string
@@ -42,6 +65,7 @@ class Message(Base):
     client_msg_id = Column(String(64), nullable=True, unique=True)
 
     user = relationship("User", back_populates="messages")
+    session = relationship("Session", back_populates="messages")
 
     def __repr__(self):
         return f"<Message(role='{self.role}', type='{self.type}', len={len(self.content)})>"
@@ -91,4 +115,17 @@ def init_db(db_path: str):
     # 首次启动会自动建表。
     engine = create_engine(f"sqlite:///{db_path}", echo=False)
     Base.metadata.create_all(engine)
+
+    # 动态平滑迁移：检查 messages 表是否已有 session_id 字段
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("PRAGMA table_info(messages)"))
+            columns = [row[1] for row in result]
+            if "session_id" not in columns:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN session_id VARCHAR(64)"))
+                conn.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("lumi").warning(f"[DB Migration] 检查/迁移 session_id 字段: {e}")
+
     return sessionmaker(bind=engine)

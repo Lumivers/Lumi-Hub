@@ -33,10 +33,12 @@ class HistoryHandlersMixin:
         limit = payload.get("limit", 50)
         offset = payload.get("offset", 0)
         persona_id = payload.get("persona_id", "default")
+        session_id = payload.get("session_id")
 
         messages = self.db.get_messages(
             user_id=user_id,
             persona_id=persona_id,
+            session_id=session_id,
             limit=limit,
             offset=offset,
         )

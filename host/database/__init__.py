@@ -1,4 +1,4 @@
-from .models import User, Message, init_db
+from .models import User, Message, Session, init_db
 from .manager import DatabaseManager
 
-__all__ = ['User', 'Message', 'DatabaseManager', 'init_db']
+__all__ = ['User', 'Message', 'Session', 'DatabaseManager', 'init_db']

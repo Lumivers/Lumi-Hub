@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -20,8 +19,7 @@ import '../theme/app_theme.dart';
 import '../widgets/live2d_view.dart';
 import '../widgets/trace_timeline_widget.dart';
 import 'components/approval_dialog.dart';
-import 'memory_screen.dart';
-import 'skill_screen.dart';
+import 'extension_center_dialog.dart';
 import 'settings_hub_dialog.dart';
 
 part 'chat_screen_sidebar.dart';
@@ -44,6 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
   VoidCallback? _wsListener;
 
   bool _isSelectionMode = false;
+  bool _showSidebar = true;
   bool _showLive2dPanel = false;
   bool _loadingOlder = false;
   bool _pendingInitialBottom = true;
@@ -552,7 +551,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final ws = context.watch<WsService>();
     final settings = context.watch<AppSettings>();
     final screenWidth = MediaQuery.of(context).size.width;
-    final isCompact = screenWidth < 920;
+    final isDesktop = !kIsWeb && (Platform.isLinux || Platform.isMacOS || Platform.isWindows);
+    final isCompact = !isDesktop && screenWidth < 700;
 
     _ensureInitialBottomIfNeeded(ws);
 
@@ -567,9 +567,14 @@ class _ChatScreenState extends State<ChatScreen> {
             selectedCount: _selectedMessageIds.length,
             onCancelSelection: _toggleSelectionMode,
             onDeleteSelected: () => _deleteSelectedMessages(ws),
-            onOpenSidebar: isCompact
-                ? () => Scaffold.of(scaffoldContext).openDrawer()
-                : null,
+            onOpenSidebar: () {
+              if (isCompact) {
+                Scaffold.of(scaffoldContext).openDrawer();
+              } else {
+                setState(() => _showSidebar = !_showSidebar);
+              }
+            },
+            isSidebarOpen: isCompact ? false : _showSidebar,
             onToggleLive2d: () => setState(() => _showLive2dPanel = !_showLive2dPanel),
             isLive2dOpen: _showLive2dPanel,
           ),
@@ -757,8 +762,23 @@ class _ChatScreenState extends State<ChatScreen> {
           ? chatMain
           : Row(
               children: [
-                _Sidebar(colors: colors, ws: ws),
-                VerticalDivider(width: 1, color: colors.divider),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 240),
+                  curve: Curves.easeInOutCubic,
+                  width: _showSidebar ? 270.0 : 0.0,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      minWidth: 270.0,
+                      maxWidth: 270.0,
+                      alignment: Alignment.centerLeft,
+                      child: _Sidebar(
+                        colors: colors,
+                        ws: ws,
+                        onToggleCollapse: () => setState(() => _showSidebar = false),
+                      ),
+                    ),
+                  ),
+                ),
                 Expanded(child: chatMain),
                 if (_showLive2dPanel) ...[
                   VerticalDivider(width: 1, color: colors.divider),

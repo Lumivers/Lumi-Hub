@@ -41,6 +41,7 @@ class AgentLoop:
         skill_prompt: str = "",
         msg_id: str = "",
         session_id: str = "default",
+        workspace_dir: str = "",
     ):
         self.llm = llm_provider
         self.tools = tool_registry
@@ -57,6 +58,7 @@ class AgentLoop:
         self.skill_prompt = skill_prompt
         self.msg_id = msg_id or str(uuid.uuid4())[:8]
         self.session_id = session_id
+        self.workspace_dir = workspace_dir
 
         # 任务 Trace 收集器
         self.trace_collector = TraceCollector(session_id=self.session_id, msg_id=self.msg_id)
@@ -166,8 +168,17 @@ class AgentLoop:
                             break
 
                         tool_name = tc["name"]
-                        tool_args = tc["arguments"]
+                        tool_args = dict(tc["arguments"])
                         tool_call_id = tc["id"]
+
+                        # 工作区目录 (CWD) 与相对路径安全注入
+                        if self.workspace_dir:
+                            if "path" in tool_args and isinstance(tool_args["path"], str):
+                                p = tool_args["path"].strip()
+                                if p and not os.path.isabs(p):
+                                    tool_args["path"] = os.path.normpath(os.path.join(self.workspace_dir, p))
+                            if tool_name == "run_command" and not tool_args.get("cwd"):
+                                tool_args["cwd"] = self.workspace_dir
 
                         # 1. 记录并通知 Step 启动
                         step = self.trace_collector.start_step(tool_name, tool_args)
@@ -223,6 +234,7 @@ class AgentLoop:
                             content=full_text,
                             client_msg_id=f"{self.msg_id}_ai",
                             persona_id=self.persona_id,
+                            session_id=self.session_id,
                         )
 
                     # 触发记忆提取（异步，不阻塞回复）

@@ -6,8 +6,13 @@ import '../services/ws_service.dart';
 /// 记忆档案管理页面
 class MemoryScreen extends StatefulWidget {
   final bool showAsDialog;
+  final bool embedded;
 
-  const MemoryScreen({super.key, this.showAsDialog = false});
+  const MemoryScreen({
+    super.key,
+    this.showAsDialog = false,
+    this.embedded = false,
+  });
 
   /// 以模态对话框形式展示记忆档案
   static Future<void> show(BuildContext context) {
@@ -266,35 +271,37 @@ class _MemoryScreenState extends State<MemoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: !widget.showAsDialog,
-        leading: widget.showAsDialog
-            ? const Padding(
-                padding: EdgeInsets.only(left: 12.0),
-                child: Icon(Icons.psychology_outlined),
-              )
-            : null,
-        title: Text('记忆档案 ($_activePersona)'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: '刷新',
-            onPressed: _loadMemories,
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_sweep_outlined),
-            tooltip: '清空此人格记忆',
-            onPressed: _memories.isEmpty ? null : _clearAllMemories,
-          ),
-          if (widget.showAsDialog)
-            IconButton(
-              icon: const Icon(Icons.close),
-              tooltip: '关闭',
-              onPressed: () => Navigator.of(context).pop(),
+      appBar: widget.embedded
+          ? null
+          : AppBar(
+              automaticallyImplyLeading: !widget.showAsDialog,
+              leading: widget.showAsDialog
+                  ? const Padding(
+                      padding: EdgeInsets.only(left: 12.0),
+                      child: Icon(Icons.psychology_outlined),
+                    )
+                  : null,
+              title: Text('记忆档案 ($_activePersona)'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: '刷新',
+                  onPressed: _loadMemories,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  tooltip: '清空此人格记忆',
+                  onPressed: _memories.isEmpty ? null : _clearAllMemories,
+                ),
+                if (widget.showAsDialog)
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: '关闭',
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                const SizedBox(width: 8),
+              ],
             ),
-          const SizedBox(width: 8),
-        ],
-      ),
       body: Column(
         children: [
           // 顶部筛选 Chips
@@ -308,28 +315,49 @@ class _MemoryScreenState extends State<MemoryScreen> {
                 ),
               ),
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  FilterChip(
-                    label: const Text('全部'),
-                    selected: _selectedCategory == null,
-                    onSelected: (val) {
-                      setState(() => _selectedCategory = null);
-                      _loadMemories();
-                    },
+            child: Row(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        FilterChip(
+                          label: const Text('全部'),
+                          selected: _selectedCategory == null,
+                          onSelected: (val) {
+                            setState(() => _selectedCategory = null);
+                            _loadMemories();
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('preference', '偏好'),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('fact', '事实'),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('correction', '纠错'),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('summary', '总结'),
+                      ],
+                    ),
                   ),
+                ),
+                if (widget.embedded) ...[
                   const SizedBox(width: 8),
-                  _buildFilterChip('preference', '偏好'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('fact', '事实'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('correction', '纠错'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('summary', '总结'),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 18),
+                    tooltip: '刷新',
+                    onPressed: _loadMemories,
+                    splashRadius: 16,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                    tooltip: '清空此人格记忆',
+                    onPressed: _memories.isEmpty ? null : _clearAllMemories,
+                    splashRadius: 16,
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
 

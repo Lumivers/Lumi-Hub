@@ -85,7 +85,6 @@ class WsService extends ChangeNotifier {
   int _historyOffset = 0;
   bool _historyHasMore = true;
   bool _historyLoading = false;
-  bool _pendingInitialHistoryAfterPersonaList = false;
   bool get hasMoreHistory => _historyHasMore;
   bool get isHistoryLoading => _historyLoading;
   static const int _uploadChunkSize = 256 * 1024;
@@ -131,6 +130,16 @@ class WsService extends ChangeNotifier {
   List<Map<String, dynamic>> get personas => List.unmodifiable(_personas);
   String _activePersonaId = '';
   String get activePersonaId => _activePersonaId;
+
+  // ── 工作区与会话状态 ──
+  List<Map<String, dynamic>> _sessions = [];
+  List<Map<String, dynamic>> get sessions => List.unmodifiable(_sessions);
+  String? _activeSessionId;
+  String? get activeSessionId => _activeSessionId;
+  String _activeWorkspacePath = '';
+  String get activeWorkspacePath => _activeWorkspacePath;
+  List<String> _recentWorkspaces = [];
+  List<String> get recentWorkspaces => List.unmodifiable(_recentWorkspaces);
 
   // 约定 AI 回复 id 与请求 message_id 的映射规则。
   String _assistantMsgId(String msgId) => '${msgId}_ai';
@@ -362,6 +371,8 @@ class WsService extends ChangeNotifier {
       'content': contentForHost,
       'context_id': 'default',
       'persona_id': _activePersonaId,
+      'session_id': _activeSessionId,
+      'workspace_path': _activeWorkspacePath,
       'attachments': attachments,
     };
     if (skillName != null && skillName.isNotEmpty) {
@@ -454,6 +465,15 @@ class WsService extends ChangeNotifier {
         case 'MESSAGE_DELETE_RESPONSE':
         case 'PERSONA_DELETE_RESPONSE':
           _personaController.add(data);
+          break;
+        case 'SESSION_LIST_RESPONSE':
+          _handleSessionListResponse(data);
+          break;
+        case 'SESSION_CREATE_RESPONSE':
+          _handleSessionCreateResponse(data);
+          break;
+        case 'SESSION_UPDATE_RESPONSE':
+        case 'SESSION_DELETE_RESPONSE':
           break;
         case 'LLM_CONFIG_RESPONSE':
         case 'APP_STATUS_RESPONSE':
@@ -645,9 +665,10 @@ class WsService extends ChangeNotifier {
       }
 
       _isAuthenticated = true;
-      // 先拿人格列表，再按激活人格拉历史，避免首次 persona_id 为空。
-      _pendingInitialHistoryAfterPersonaList = true;
-      requestPersonaList();
+      unawaited(loadRecentWorkspaces().then((_) {
+        requestPersonaList();
+        requestSessionList();
+      }));
       notifyListeners();
     } else {
       debugPrint('[WS] Auth 响应未成功: ${payload['message']}');
@@ -712,16 +733,52 @@ class WsService extends ChangeNotifier {
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
     final list = payload['personas'] as List<dynamic>? ?? [];
     _personas = list.map((p) => Map<String, dynamic>.from(p as Map)).toList();
-    // 初始化激活人格（取第一个，或保持现有）
     if (_activePersonaId.isEmpty && _personas.isNotEmpty) {
       _activePersonaId = _personas.first['id'] as String? ?? '';
     }
+    notifyListeners();
+  }
 
-    if (_pendingInitialHistoryAfterPersonaList) {
-      _pendingInitialHistoryAfterPersonaList = false;
+  void _handleSessionListResponse(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final list = payload['sessions'] as List<dynamic>? ?? [];
+    _sessions = list.map((s) => Map<String, dynamic>.from(s as Map)).toList();
+
+    if (_sessions.isEmpty) {
+      createSession(workspacePath: _activeWorkspacePath);
+    } else {
+      final exists = _sessions.any((s) => s['id'] == _activeSessionId);
+      if (!exists) {
+        _activeSessionId = _sessions.first['id'] as String?;
+        final pid = _sessions.first['persona_id'] as String?;
+        if (pid != null && pid.isNotEmpty) {
+          _activePersonaId = pid;
+        }
+      }
       unawaited(loadInitialHistory());
     }
+    notifyListeners();
+  }
 
+  void _handleSessionCreateResponse(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final session = payload['session'] as Map<String, dynamic>?;
+    if (session != null) {
+      final sid = session['id'] as String?;
+      _sessions.removeWhere((s) => s['id'] == sid);
+      _sessions.insert(0, session);
+      if (sid != null) {
+        _activeSessionId = sid;
+        final pid = session['persona_id'] as String?;
+        if (pid != null && pid.isNotEmpty) {
+          _activePersonaId = pid;
+        }
+        _messages.clear();
+        _historyOffset = 0;
+        _historyHasMore = false;
+        unawaited(loadInitialHistory());
+      }
+    }
     notifyListeners();
   }
 
@@ -808,6 +865,7 @@ class WsService extends ChangeNotifier {
         'limit': limit,
         'offset': offset,
         'persona_id': _activePersonaId,
+        'session_id': _activeSessionId,
       },
     });
     return completer.future.timeout(
@@ -830,6 +888,186 @@ class WsService extends ChangeNotifier {
   Future<void> loadOlderHistory({int limit = _historyPageSize}) async {
     if (_historyLoading || !_historyHasMore) return;
     await requestHistory(limit: limit, offset: _historyOffset);
+  }
+
+  // ── 工作区与会话控制方法 ──
+
+  Future<void> loadRecentWorkspaces() async {
+    final prefs = await SharedPreferences.getInstance();
+    _recentWorkspaces = prefs.getStringList('recent_workspaces') ?? [];
+    if (_recentWorkspaces.isEmpty) {
+      final defaultPath = Directory.current.path;
+      _recentWorkspaces = [defaultPath];
+      await prefs.setStringList('recent_workspaces', _recentWorkspaces);
+    }
+    if (_activeWorkspacePath.isEmpty && _recentWorkspaces.isNotEmpty) {
+      _activeWorkspacePath = _recentWorkspaces.first;
+    }
+    notifyListeners();
+  }
+
+  Future<void> addWorkspace(String path) async {
+    if (path.isEmpty) return;
+    final normalized = path.trim();
+    if (!_recentWorkspaces.contains(normalized)) {
+      _recentWorkspaces.insert(0, normalized);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('recent_workspaces', _recentWorkspaces);
+    }
+    setActiveWorkspace(normalized);
+  }
+
+  Future<void> removeWorkspace(String path) async {
+    _recentWorkspaces.remove(path);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('recent_workspaces', _recentWorkspaces);
+    if (_activeWorkspacePath == path) {
+      if (_recentWorkspaces.isNotEmpty) {
+        setActiveWorkspace(_recentWorkspaces.first);
+      } else {
+        _activeWorkspacePath = '';
+        _activeSessionId = null;
+        _sessions.clear();
+        _messages.clear();
+      }
+    }
+    notifyListeners();
+  }
+
+  void setActiveWorkspace(String path) {
+    if (_activeWorkspacePath == path) return;
+    _activeWorkspacePath = path;
+    _activeSessionId = null;
+    _messages.clear();
+    _historyOffset = 0;
+    _historyHasMore = false;
+    notifyListeners();
+    requestSessionList(workspacePath: path);
+  }
+
+  void requestSessionList({String? workspacePath}) {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'SESSION_LIST',
+      'source': 'client',
+      'target': 'host',
+      'payload': {
+        'workspace_path': workspacePath ?? _activeWorkspacePath,
+      },
+    });
+  }
+
+  void createSession({String? workspacePath, String? title, String? personaId}) {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'SESSION_CREATE',
+      'source': 'client',
+      'target': 'host',
+      'payload': {
+        'workspace_path': workspacePath ?? _activeWorkspacePath,
+        'title': title ?? '新对话',
+        'persona_id': personaId ?? _activePersonaId,
+      },
+    });
+  }
+
+  void switchSession(String sessionId) {
+    if (_activeSessionId == sessionId) return;
+    _activeSessionId = sessionId;
+    final sess = _sessions.firstWhere((s) => s['id'] == sessionId, orElse: () => {});
+    if (sess['persona_id'] != null && sess['persona_id'].toString().isNotEmpty) {
+      _activePersonaId = sess['persona_id'].toString();
+    }
+    _messages.clear();
+    _historyOffset = 0;
+    _historyHasMore = true;
+    _historyLoading = false;
+    notifyListeners();
+    unawaited(loadInitialHistory());
+  }
+
+  void updateSessionTitle(String sessionId, String newTitle) {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'SESSION_UPDATE',
+      'source': 'client',
+      'target': 'host',
+      'payload': {
+        'session_id': sessionId,
+        'title': newTitle,
+      },
+    });
+    final idx = _sessions.indexWhere((s) => s['id'] == sessionId);
+    if (idx != -1) {
+      _sessions[idx]['title'] = newTitle;
+      notifyListeners();
+    }
+  }
+
+  void updateSessionPersona(String sessionId, String personaId) {
+    _activePersonaId = personaId;
+    if (_status != WsStatus.connected || !_isAuthenticated) {
+      notifyListeners();
+      return;
+    }
+    _send({
+      'message_id': _genId(),
+      'type': 'SESSION_UPDATE',
+      'source': 'client',
+      'target': 'host',
+      'payload': {
+        'session_id': sessionId,
+        'persona_id': personaId,
+      },
+    });
+    final idx = _sessions.indexWhere((s) => s['id'] == sessionId);
+    if (idx != -1) {
+      _sessions[idx]['persona_id'] = personaId;
+    }
+    notifyListeners();
+  }
+
+  void deleteSession(String sessionId) {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'SESSION_DELETE',
+      'source': 'client',
+      'target': 'host',
+      'payload': {'session_id': sessionId},
+    });
+    _sessions.removeWhere((s) => s['id'] == sessionId);
+    if (_activeSessionId == sessionId) {
+      if (_sessions.isNotEmpty) {
+        switchSession(_sessions.first['id']);
+      } else {
+        _activeSessionId = null;
+        _messages.clear();
+        createSession(workspacePath: _activeWorkspacePath);
+      }
+    }
+    notifyListeners();
+  }
+
+  void clearSessionHistory() {
+    if (_status != WsStatus.connected || !_isAuthenticated) return;
+    _send({
+      'message_id': _genId(),
+      'type': 'PERSONA_CLEAR_HISTORY',
+      'source': 'client',
+      'target': 'host',
+      'payload': {
+        'persona_id': _activePersonaId,
+        'session_id': _activeSessionId,
+      },
+    });
+    _messages.clear();
+    _historyOffset = 0;
+    _historyHasMore = false;
+    notifyListeners();
   }
 
   void requestPersonaList() {

@@ -46,6 +46,7 @@ from .handlers import (
     HistoryHandlersMixin,
     McpHandlersMixin,
     PersonaHandlersMixin,
+    SessionHandlersMixin,
     UploadHandlersMixin,
     VoiceHandlersMixin,
 )
@@ -61,6 +62,7 @@ class LumiHubApp(
     HistoryHandlersMixin,
     McpHandlersMixin,
     PersonaHandlersMixin,
+    SessionHandlersMixin,
     UploadHandlersMixin,
     VoiceHandlersMixin,
 ):
@@ -150,6 +152,10 @@ class LumiHubApp(
             "SKILL_LIST": self._handle_skill_list,
             "SKILL_INSTALL": self._handle_skill_install,
             "SKILL_UNINSTALL": self._handle_skill_uninstall,
+            "SESSION_LIST": self._handle_session_list,
+            "SESSION_CREATE": self._handle_session_create,
+            "SESSION_UPDATE": self._handle_session_update,
+            "SESSION_DELETE": self._handle_session_delete,
         }
 
         # WebSocket 回调注册
@@ -361,6 +367,8 @@ class LumiHubApp(
         msg_id = message.get("message_id", str(uuid.uuid4())[:8])
         context_id = payload.get("context_id", ws_session_id)
         persona_id = payload.get("persona_id", "default")
+        session_id = payload.get("session_id")
+        workspace_path = payload.get("workspace_path", "")
 
         # 鉴权校验
         user_id = self.active_sessions.get(ws_session_id)
@@ -378,6 +386,19 @@ class LumiHubApp(
                 },
             )
             return
+
+        # 确保会话存在
+        if session_id:
+            sess = self.db.get_or_create_session(
+                user_id=user_id,
+                session_id=session_id,
+                workspace_path=workspace_path,
+                persona_id=persona_id,
+            )
+            if sess.get("workspace_path") and not workspace_path:
+                workspace_path = sess["workspace_path"]
+        else:
+            session_id = f"lumi_hub!{user_id}!{context_id}!{persona_id}"
 
         # 处理附件
         attachment_lines: list[str] = []
@@ -411,7 +432,7 @@ class LumiHubApp(
             if attachment_hints:
                 user_content += "\n\n" + "\n".join(attachment_hints)
 
-        logger.info(f"[Lumi-Hub] 收到消息 (session={ws_session_id}, persona={persona_id}): {user_content[:100]}")
+        logger.info(f"[Lumi-Hub] 收到消息 (session={session_id}, persona={persona_id}, ws={ws_session_id}): {user_content[:100]}")
 
         # 持久化用户消息
         if isinstance(attachments, list) and attachments:
@@ -428,6 +449,7 @@ class LumiHubApp(
                     content=f"{prefix} {local_path}|||{file_name}",
                     client_msg_id=f"{msg_id}_att_{file_name}",
                     persona_id=persona_id,
+                    session_id=session_id,
                 )
 
         if original_user_content:
@@ -437,6 +459,7 @@ class LumiHubApp(
                 content=original_user_content,
                 client_msg_id=msg_id,
                 persona_id=persona_id,
+                session_id=session_id,
             )
 
         # 获取人格
@@ -448,6 +471,7 @@ class LumiHubApp(
         history = self.db.get_messages(
             user_id=user_id,
             persona_id=persona_id,
+            session_id=session_id,
             limit=50,
             offset=0,
         )
@@ -460,7 +484,6 @@ class LumiHubApp(
             skill_prompt = self.skill_manager.get_skill_prompt(skill_name, skill_params)
 
         # 创建 AgentLoop 并执行
-        session_id = f"lumi_hub!{user_id}!{context_id}!{persona_id}"
         agent = AgentLoop(
             llm_provider=self.llm,
             tool_registry=self.tool_registry,
@@ -477,6 +500,7 @@ class LumiHubApp(
             skill_prompt=skill_prompt,
             msg_id=msg_id,
             session_id=session_id,
+            workspace_dir=workspace_path,
         )
 
         # 异步执行 Agent

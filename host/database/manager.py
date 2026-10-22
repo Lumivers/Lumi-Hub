@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 import logging
 logger = logging.getLogger("lumi")
-from .models import init_db, User, Message, Attachment
+from .models import init_db, User, Message, Attachment, Session
 
 class DatabaseManager:
     """管理 Lumi-Hub 的本地 SQLite 数据库操作"""
@@ -138,6 +138,114 @@ class DatabaseManager:
                 return {"id": user.id, "username": user.username, "token": user.token}
             return None
 
+    # ===== 会话 (Session) 相关 =====
+
+    def create_session(
+        self,
+        user_id: int,
+        workspace_path: str = "",
+        title: str = "新对话",
+        persona_id: str = "default",
+        session_id: str = None,
+    ) -> dict:
+        """创建一个新会话并关联工作区路径"""
+        sid = session_id or f"sess_{secrets.token_hex(8)}"
+        with self.SessionLocal() as session:
+            sess = Session(
+                id=sid,
+                user_id=user_id,
+                workspace_path=workspace_path or "",
+                title=title or "新对话",
+                persona_id=persona_id or "default",
+            )
+            session.add(sess)
+            session.commit()
+            session.refresh(sess)
+            return {
+                "id": sess.id,
+                "workspace_path": sess.workspace_path,
+                "title": sess.title,
+                "persona_id": sess.persona_id,
+                "created_at": int(sess.created_at.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                "updated_at": int(sess.updated_at.replace(tzinfo=timezone.utc).timestamp() * 1000),
+            }
+
+    def get_or_create_session(
+        self,
+        user_id: int,
+        session_id: str = None,
+        workspace_path: str = "",
+        title: str = "新对话",
+        persona_id: str = "default",
+    ) -> dict:
+        """获取或创建会话"""
+        with self.SessionLocal() as session:
+            if session_id:
+                sess = session.query(Session).filter(Session.id == session_id, Session.user_id == user_id).first()
+                if sess:
+                    return {
+                        "id": sess.id,
+                        "workspace_path": sess.workspace_path,
+                        "title": sess.title,
+                        "persona_id": sess.persona_id,
+                        "created_at": int(sess.created_at.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                        "updated_at": int(sess.updated_at.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                    }
+        return self.create_session(user_id, workspace_path, title, persona_id, session_id)
+
+    def list_sessions(self, user_id: int, workspace_path: str = None) -> list[dict]:
+        """列出用户的会话列表，按更新时间倒序排序"""
+        with self.SessionLocal() as session:
+            query = session.query(Session).filter(Session.user_id == user_id)
+            if workspace_path is not None and workspace_path != "":
+                query = query.filter(Session.workspace_path == workspace_path)
+            sessions = query.order_by(Session.updated_at.desc()).all()
+            return [
+                {
+                    "id": s.id,
+                    "workspace_path": s.workspace_path,
+                    "title": s.title,
+                    "persona_id": s.persona_id,
+                    "created_at": int(s.created_at.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                    "updated_at": int(s.updated_at.replace(tzinfo=timezone.utc).timestamp() * 1000),
+                }
+                for s in sessions
+            ]
+
+    def update_session(
+        self,
+        session_id: str,
+        title: str = None,
+        persona_id: str = None,
+        workspace_path: str = None,
+    ) -> bool:
+        """更新会话元数据"""
+        with self.SessionLocal() as session:
+            sess = session.query(Session).filter(Session.id == session_id).first()
+            if not sess:
+                return False
+            if title is not None:
+                sess.title = title
+            if persona_id is not None:
+                sess.persona_id = persona_id
+            if workspace_path is not None:
+                sess.workspace_path = workspace_path
+            sess.updated_at = datetime.datetime.now(timezone.utc)
+            session.commit()
+            return True
+
+    def delete_session(self, user_id: int, session_id: str) -> bool:
+        """删除会话及其关联的所有消息"""
+        with self.SessionLocal() as session:
+            sess = session.query(Session).filter(Session.id == session_id, Session.user_id == user_id).first()
+            if not sess:
+                return False
+            session.query(Message).filter(Message.session_id == session_id).delete(synchronize_session=False)
+            session.delete(sess)
+            session.commit()
+            logger.info(f"[Lumi-Hub DB] 用户 {user_id} 删除了会话 {session_id}")
+            return True
+
     # ===== 消息相关 =====
 
     def _merge_text_with_overlap(self, existing: str, incoming: str) -> str:
@@ -157,8 +265,17 @@ class DatabaseManager:
                 return existing + incoming[overlap:]
         return existing + incoming
 
-    def save_message(self, user_id: int, role: str, content: str, msg_type: str = 'chat', client_msg_id: str = None, persona_id: str = 'default') -> dict:
-        """保存单条消息记录"""
+    def save_message(
+        self,
+        user_id: int,
+        role: str,
+        content: str,
+        msg_type: str = 'chat',
+        client_msg_id: str = None,
+        persona_id: str = 'default',
+        session_id: str = None,
+    ) -> dict:
+        """保存单条消息记录，并同步更新所属会话的时间与自动标题"""
         with self.SessionLocal() as session:
             if client_msg_id:
                 # 幂等写入：相同 client_msg_id 走更新路径。
@@ -166,6 +283,8 @@ class DatabaseManager:
                 if existing:
                     existing.user_id = user_id
                     existing.persona_id = persona_id
+                    if session_id:
+                        existing.session_id = session_id
                     existing.role = role
                     # assistant 分段回复使用同一个 client_msg_id，需累积而非覆盖。
                     if role == 'assistant' and existing.role == 'assistant':
@@ -181,18 +300,33 @@ class DatabaseManager:
                         "role": existing.role,
                         "content": existing.content,
                         "type": existing.type,
+                        "session_id": existing.session_id,
+                        "persona_id": existing.persona_id,
                         "timestamp": int(existing.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
                     }
 
             msg = Message(
                 user_id=user_id,
                 persona_id=persona_id,
+                session_id=session_id,
                 role=role,
                 content=content,
                 type=msg_type,
                 client_msg_id=client_msg_id
             )
             session.add(msg)
+
+            # 更新关联会话的 updated_at 及自动生成首轮标题
+            if session_id:
+                sess = session.query(Session).filter(Session.id == session_id).first()
+                if sess:
+                    sess.updated_at = datetime.datetime.now(timezone.utc)
+                    if role == "user" and (sess.title == "新对话" or not sess.title):
+                        # 提炼首句作为会话名（去除换行，截取前 24 字符）
+                        clean_title = content.replace("\n", " ").strip()
+                        if clean_title:
+                            sess.title = clean_title[:24]
+
             session.commit()
             session.refresh(msg)
             
@@ -201,21 +335,27 @@ class DatabaseManager:
                 "role": msg.role,
                 "content": msg.content,
                 "type": msg.type,
+                "session_id": msg.session_id,
+                "persona_id": msg.persona_id,
                 "timestamp": int(msg.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
             }
 
-    def clear_messages(self, user_id: int, persona_id: str = "default") -> int:
-        """删除指定用户的指定人格的全部聊天记录，返回被删除的条数。"""
+    def clear_messages(self, user_id: int, persona_id: str = "default", session_id: str = None) -> int:
+        """删除指定用户指定会话（或人格）的聊天记录，返回被删除条数。"""
         with self.SessionLocal() as session:
-            query = session.query(Message).filter(Message.user_id == user_id, Message.persona_id == persona_id)
+            query = session.query(Message).filter(Message.user_id == user_id)
+            if session_id:
+                query = query.filter(Message.session_id == session_id)
+            else:
+                query = query.filter(Message.persona_id == persona_id)
             count = query.count()
-            query.delete()
+            query.delete(synchronize_session=False)
             session.commit()
-            logger.info(f"[Lumi-Hub DB] 已清空用户 {user_id} 对人格 {persona_id} 的 {count} 条聊天记录")
+            logger.info(f"[Lumi-Hub DB] 已清空用户 {user_id} (session={session_id}, persona={persona_id}) 的 {count} 条聊天记录")
             return count
 
-    def delete_messages(self, user_id: int, message_ids: list[str], persona_id: str = "default") -> int:
-        """按 message_id/client_msg_id 删除指定用户某人格下的消息，返回删除条数。"""
+    def delete_messages(self, user_id: int, message_ids: list[str], persona_id: str = "default", session_id: str = None) -> int:
+        """按 message_id/client_msg_id 删除指定消息，返回删除条数。"""
         normalized_ids = {str(mid).strip() for mid in (message_ids or []) if str(mid).strip()}
         if not normalized_ids:
             return 0
@@ -232,16 +372,16 @@ class DatabaseManager:
                     pass
 
         with self.SessionLocal() as session:
-            base_query = session.query(Message).filter(
-                Message.user_id == user_id,
-                Message.persona_id == persona_id,
-            )
+            base_query = session.query(Message).filter(Message.user_id == user_id)
+            if session_id:
+                base_query = base_query.filter(Message.session_id == session_id)
+            else:
+                base_query = base_query.filter(Message.persona_id == persona_id)
 
             filters = [Message.client_msg_id.in_(list(normalized_ids))]
             if numeric_ids:
                 filters.append(Message.id.in_(numeric_ids))
             if ai_base_ids:
-                # 兼容历史脏数据：早期 assistant 可能被写成与 user 相同的 base id
                 filters.append(
                     (Message.role == "assistant") & (Message.client_msg_id.in_(ai_base_ids))
                 )
@@ -250,18 +390,29 @@ class DatabaseManager:
             count = query.count()
             query.delete(synchronize_session=False)
             session.commit()
-            logger.info(f"[Lumi-Hub DB] 已删除用户 {user_id} 在人格 {persona_id} 下的 {count} 条消息")
+            logger.info(f"[Lumi-Hub DB] 已删除用户 {user_id} 下的 {count} 条消息")
             return count
 
-    def get_messages(self, user_id: int, persona_id: str = "default", limit: int = 50, offset: int = 0) -> list:
-        """倒序获取指定用户的特定人格的历史消息，返回格式化后的列表"""
+    def get_messages(
+        self,
+        user_id: int,
+        persona_id: str = "default",
+        session_id: str = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list:
+        """倒序获取历史消息（优先按 session_id，回退按 persona_id），返回时间正序列表"""
         with self.SessionLocal() as session:
-            # 按照时间降序获取（最新的在前面）
-            messages = session.query(Message).filter(Message.user_id == user_id, Message.persona_id == persona_id)\
-                              .order_by(Message.timestamp.desc())\
-                              .offset(offset).limit(limit).all()
+            query = session.query(Message).filter(Message.user_id == user_id)
+            if session_id:
+                query = query.filter(Message.session_id == session_id)
+            else:
+                query = query.filter(Message.persona_id == persona_id)
+
+            messages = query.order_by(Message.timestamp.desc())\
+                            .offset(offset).limit(limit).all()
             
-            # 前端展示要求按时间正序，所以这里执行 reverse。
+            # 前端展示要求按时间正序
             messages.reverse()
             
             result = []
@@ -271,6 +422,8 @@ class DatabaseManager:
                     "role": msg.role,
                     "content": msg.content,
                     "type": msg.type,
+                    "session_id": msg.session_id,
+                    "persona_id": msg.persona_id,
                     "timestamp": int(msg.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
                 })
             return result

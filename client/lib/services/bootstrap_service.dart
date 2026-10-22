@@ -361,8 +361,10 @@ class BootstrapService extends ChangeNotifier {
     // 1. 优先检查项目根目录下的虚拟环境
     final venvCandidates = [
       '${projectRoot.path}/.venv/${isWin ? "Scripts/python.exe" : "bin/python3"}',
+      '${projectRoot.path}/client/.venv/${isWin ? "Scripts/python.exe" : "bin/python3"}',
       '${projectRoot.path}/venv/${isWin ? "Scripts/python.exe" : "bin/python3"}',
       '${projectRoot.path}/.venv/${isWin ? "Scripts/python.exe" : "bin/python"}',
+      '${projectRoot.path}/client/.venv/${isWin ? "Scripts/python.exe" : "bin/python"}',
       '${projectRoot.path}/venv/${isWin ? "Scripts/python.exe" : "bin/python"}',
     ];
     for (final path in venvCandidates) {

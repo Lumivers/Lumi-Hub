@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,7 +7,7 @@ import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import 'llm_settings_screen.dart';
-import 'mcp_settings_screen.dart';
+import 'memory_screen.dart';
 import 'voice_settings_screen.dart';
 
 /// 统一设置中心对话框 (Settings Hub Dialog)
@@ -100,7 +98,7 @@ class _SettingsHubDialogState extends State<SettingsHubDialog>
           tabs: const [
             Tab(icon: Icon(Icons.tune, size: 18), text: '通用设置'),
             Tab(icon: Icon(Icons.smart_toy_outlined, size: 18), text: 'AI 模型'),
-            Tab(icon: Icon(Icons.extension_outlined, size: 18), text: 'MCP 扩展'),
+            Tab(icon: Icon(Icons.psychology_outlined, size: 18), text: '长期记忆'),
           ],
         ),
       ),
@@ -109,7 +107,7 @@ class _SettingsHubDialogState extends State<SettingsHubDialog>
         children: [
           _GeneralSettingsTab(ws: widget.ws, colors: widget.colors),
           const LlmSettingsScreen(embedded: true),
-          const McpSettingsScreen(embedded: true),
+          const MemoryScreen(embedded: true),
         ],
       ),
     );
