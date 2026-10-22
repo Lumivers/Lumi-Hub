@@ -16,7 +16,7 @@ const Map<WindowCloseAction, String> kWindowCloseActionLabels = {
 };
 
 const Map<ConnectionMode, String> kConnectionModeLabels = {
-  ConnectionMode.localOrUsb: '本机/USB 调试 (127.0.0.1)',
+  ConnectionMode.localOrUsb: '本机直连 (127.0.0.1)',
   ConnectionMode.lan: '局域网 (ws://192.168.x.x:8765)',
   ConnectionMode.publicTunnel: '公网/内网穿透 (wss://domain)',
 };

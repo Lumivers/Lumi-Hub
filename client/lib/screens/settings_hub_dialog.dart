@@ -8,7 +8,6 @@ import '../services/app_settings.dart';
 import '../services/bootstrap_service.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
-import 'auth_screen.dart';
 import 'llm_settings_screen.dart';
 import 'mcp_settings_screen.dart';
 import 'resource_package_screen.dart';
@@ -130,7 +129,8 @@ class _GeneralSettingsTab extends StatelessWidget {
 
   const _GeneralSettingsTab({required this.ws, required this.colors});
 
-  bool get _supportsLocalHostLifecycle => !kIsWeb && Platform.isWindows;
+  bool get _supportsLocalHostLifecycle =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   bool _isLocalHostUrl(String raw) {
     final uri = Uri.tryParse(raw);
@@ -165,7 +165,7 @@ class _GeneralSettingsTab extends StatelessWidget {
   Future<void> _showConnectionModeSelector(BuildContext context) async {
     final settings = context.read<AppSettings>();
     var selected = settings.connectionMode;
-    final localLabel = _supportsLocalHostLifecycle ? '本机/USB 调试 (127.0.0.1)' : 'USB 调试转发 (127.0.0.1)';
+    final localLabel = _supportsLocalHostLifecycle ? '本机直连 (127.0.0.1)' : 'USB 调试转发 (127.0.0.1)';
 
     await showDialog<void>(
       context: context,
@@ -179,6 +179,11 @@ class _GeneralSettingsTab extends StatelessWidget {
                 value: ConnectionMode.localOrUsb,
                 groupValue: selected,
                 title: Text(localLabel),
+                subtitle: Text(
+                  _supportsLocalHostLifecycle
+                      ? '在当前电脑本地运行 Host 服务'
+                      : '需 adb reverse tcp:8765 tcp:8765',
+                ),
                 onChanged: (v) => setState(() => selected = v!),
               ),
               RadioListTile<ConnectionMode>(
@@ -285,17 +290,9 @@ class _GeneralSettingsTab extends StatelessWidget {
                 ),
               ),
               OutlinedButton.icon(
-                icon: const Icon(Icons.logout, size: 16),
-                label: const Text('退出登录'),
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                onPressed: () {
-                  ws.logout();
-                  Navigator.of(context).pop();
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (_) => const AuthScreen()),
-                    (r) => false,
-                  );
-                },
+                icon: const Icon(Icons.edit, size: 16),
+                label: const Text('修改称呼'),
+                onPressed: () => _showEditNicknameDialog(context, ws),
               ),
             ],
           ),
@@ -408,6 +405,41 @@ class _GeneralSettingsTab extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  void _showEditNicknameDialog(BuildContext context, WsService ws) {
+    final ctrl = TextEditingController(text: ws.user?['username'] ?? '');
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('修改你的称呼'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(
+            labelText: '称呼 / 昵称',
+            hintText: '告诉流萤该怎么称呼你',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newName = ctrl.text.trim();
+              if (newName.isNotEmpty) {
+                ws.updateNickname(newName);
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
     );
   }
 }

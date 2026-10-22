@@ -69,7 +69,8 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
   final TextEditingController _publicController = TextEditingController();
   String? _validationText;
 
-  bool get _supportsLocalHostLifecycle => !kIsWeb && Platform.isWindows;
+  bool get _supportsLocalHostLifecycle =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   bool _isLocalHostUrl(String raw) {
     final uri = Uri.tryParse(raw);
@@ -197,7 +198,7 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     final localModeLabel = _supportsLocalHostLifecycle
-        ? '本机启动 Host (127.0.0.1)'
+        ? '本机直连 (127.0.0.1)'
         : 'USB 调试转发 (127.0.0.1)';
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
@@ -246,8 +247,8 @@ class _ConnectionSettingsDialogState extends State<ConnectionSettingsDialog> {
                           title: Text(localModeLabel),
                           subtitle: Text(
                             _supportsLocalHostLifecycle
-                                ? '适合电脑端本机启动 Host 服务'
-                                : '需 adb reverse tcp:8765 tcp:8765',
+                                ? '在当前电脑本地运行 Host 服务'
+                                : '手机调试需执行 adb reverse tcp:8765 tcp:8765',
                           ),
                         ),
                         const SizedBox(height: 0),

@@ -9,17 +9,19 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 
 import 'screens/chat_screen.dart';
-import 'screens/auth_screen.dart';
 import 'screens/bootstrap_screen.dart';
 import 'services/app_settings.dart';
 import 'services/bootstrap_service.dart';
 import 'services/ws_service.dart';
 import 'theme/app_theme.dart';
 
+bool get isDesktopPlatform =>
+    !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (!kIsWeb && Platform.isWindows) {
+  if (isDesktopPlatform) {
     // 桌面端窗口初始化：按屏幕比例设置初始尺寸并启用拦截关闭。
     await windowManager.ensureInitialized();
 
@@ -32,6 +34,7 @@ void main() async {
 
     WindowOptions windowOptions = WindowOptions(
       size: initialSize,
+      minimumSize: const Size(960, 640),
       center: true,
       backgroundColor: Colors.transparent,
       title: 'Lumi Hub',
@@ -175,17 +178,21 @@ class _LumiAppState extends State<LumiApp> with WindowListener, TrayListener {
   @override
   void initState() {
     super.initState();
-    if (!kIsWeb && Platform.isWindows) {
+    if (isDesktopPlatform) {
       windowManager.addListener(this);
-      trayManager.addListener(this);
-      _initTray();
+      if (Platform.isWindows) {
+        trayManager.addListener(this);
+        _initTray();
+      }
     }
   }
 
   @override
   void dispose() {
-    if (!kIsWeb && Platform.isWindows) {
-      trayManager.removeListener(this);
+    if (isDesktopPlatform) {
+      if (Platform.isWindows) {
+        trayManager.removeListener(this);
+      }
       windowManager.removeListener(this);
     }
     super.dispose();
@@ -238,27 +245,22 @@ class AuthWrapper extends StatelessWidget {
     final bootstrap = context.watch<BootstrapService>();
     final ws = context.watch<WsService>();
 
-    // 1. 首次运行 → 引导向导（向导内部自行处理连接、LLM 配置、注册）
+    // 1. 如果用户选择离线体验或直接跳过，直接进入主界面
+    if (bootstrap.isOfflineMode) {
+      return const ChatScreen();
+    }
+
+    // 2. 首次运行 → 引导向导（向导内部自行处理连接、LLM 配置、称呼设置，支持随时跳过）
     if (bootstrap.isFirstRun) {
       return const SetupWizardScreen();
     }
 
-    // 2. 还没连上 Host → 等待连接（老用户走简洁等待页）
-    if (!bootstrap.isReady) {
+    // 3. 还没连上 Host 或认证未就绪 → 等待连接
+    if (!bootstrap.isReady || !ws.isAuthenticated) {
       return const BootstrapScreen();
     }
 
-    // 3. 连上了但 LLM 未配置 → 引导向导
-    if (!bootstrap.llmConfigured) {
-      return const SetupWizardScreen();
-    }
-
-    // 4. 未认证 → 登录页
-    if (!ws.isAuthenticated) {
-      return const AuthScreen();
-    }
-
-    // 5. 一切就绪 → 聊天页
+    // 4. 一切就绪 → 聊天页
     return const ChatScreen();
   }
 }

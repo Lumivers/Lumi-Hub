@@ -242,6 +242,15 @@ class ResourcePackageService {
     String? baseDir;
     if (Platform.isWindows) {
       baseDir = Platform.environment['LOCALAPPDATA'];
+    } else if (Platform.isLinux) {
+      baseDir = Platform.environment['XDG_DATA_HOME'] ??
+          (Platform.environment['HOME'] != null
+              ? '${Platform.environment['HOME']}/.local/share'
+              : null);
+    } else if (Platform.isMacOS) {
+      baseDir = Platform.environment['HOME'] != null
+          ? '${Platform.environment['HOME']}/Library/Application Support'
+          : null;
     }
     baseDir ??= Directory.systemTemp.path;
 

@@ -29,21 +29,73 @@ class DatabaseManager:
         # 简单好用的内置 sha256 即可，无需引入容易出依赖问题的 passlib/bcrypt
         return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
-    def create_user(self, username: str, password: str) -> dict:
-        """注册新用户。成功返回用户信息，失败返回 error。"""
+    def get_or_create_default_user(self, default_username: str = "开拓者") -> dict:
+        """获取或创建默认本地用户（支持单机免密启动）。"""
         with self.SessionLocal() as session:
-            # 检查是否已存在
+            user = session.query(User).order_by(User.id.asc()).first()
+            if not user:
+                new_token = secrets.token_hex(32)
+                hashed_pwd = self.get_password_hash("")
+                user = User(username=default_username, password_hash=hashed_pwd, token=new_token)
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            elif not user.token:
+                user.token = secrets.token_hex(32)
+                session.commit()
+                session.refresh(user)
+            return {
+                "id": user.id,
+                "username": user.username,
+                "token": user.token,
+                "created_at": user.created_at.isoformat()
+            }
+
+    def create_user(self, username: str, password: str = "") -> dict:
+        """注册或更新本地用户昵称/密码（免密/平滑兼容）。"""
+        username = (username or "").strip() or "开拓者"
+        with self.SessionLocal() as session:
+            # 检查是否已存在同名用户
             existing = session.query(User).filter(User.username == username).first()
             if existing:
-                return {"error": "Username already exists"}
-            
-            hashed_pwd = self.get_password_hash(password)
+                if password:
+                    existing.password_hash = self.get_password_hash(password)
+                if not existing.token:
+                    existing.token = secrets.token_hex(32)
+                session.commit()
+                session.refresh(existing)
+                return {
+                    "id": existing.id,
+                    "username": existing.username,
+                    "token": existing.token,
+                    "created_at": existing.created_at.isoformat()
+                }
+
+            # 如果库里有第一个默认用户，直接平滑更新其昵称，避免多用户碎片
+            first_user = session.query(User).order_by(User.id.asc()).first()
+            if first_user and first_user.username in ("开拓者", "Admin", "default", "User"):
+                first_user.username = username
+                if password:
+                    first_user.password_hash = self.get_password_hash(password)
+                if not first_user.token:
+                    first_user.token = secrets.token_hex(32)
+                session.commit()
+                session.refresh(first_user)
+                return {
+                    "id": first_user.id,
+                    "username": first_user.username,
+                    "token": first_user.token,
+                    "created_at": first_user.created_at.isoformat()
+                }
+
+            # 否则创建新用户
+            hashed_pwd = self.get_password_hash(password or "")
             new_token = secrets.token_hex(32)
             new_user = User(username=username, password_hash=hashed_pwd, token=new_token)
             session.add(new_user)
             session.commit()
             session.refresh(new_user)
-            
+
             return {
                 "id": new_user.id,
                 "username": new_user.username,
@@ -51,31 +103,39 @@ class DatabaseManager:
                 "created_at": new_user.created_at.isoformat()
             }
 
-    def verify_user(self, username: str, password: str) -> dict:
+    def verify_user(self, username: str, password: str = "") -> dict:
         """验证用户登录。成功返回用户信息（含新 token），失败返回 error。"""
         with self.SessionLocal() as session:
             user = session.query(User).filter(User.username == username).first()
-            if not user or not self.verify_password(password, user.password_hash):
+            if not user:
+                # 容错：若未设置密码或指定用户不存在，平滑降级到首个用户或创建默认用户
+                if not password:
+                    return self.get_or_create_default_user(username)
                 return {"error": "Invalid username or password"}
-            
-            # 每次登录刷新 token，使旧 token 立即失效。
+
+            # 若明确传了密码且数据库有密码哈希，则校验密码
+            if password and user.password_hash:
+                if not self.verify_password(password, user.password_hash):
+                    return {"error": "Invalid username or password"}
+
+            # 每次登录刷新 token
             user.token = secrets.token_hex(32)
             session.commit()
             session.refresh(user)
-                
+
             return {
                 "id": user.id,
                 "username": user.username,
                 "token": user.token,
                 "created_at": user.created_at.isoformat()
             }
-            
+
     def get_user_by_token(self, token: str):
         """通过 token 查找用户（用于 AUTH_RESTORE）。"""
         with self.SessionLocal() as session:
             user = session.query(User).filter(User.token == token).first()
             if user:
-                return {"id": user.id, "username": user.username}
+                return {"id": user.id, "username": user.username, "token": user.token}
             return None
 
     # ===== 消息相关 =====

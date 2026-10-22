@@ -168,12 +168,10 @@ class WsService extends ChangeNotifier {
     _token = prefs.getString('auth_token');
     _serverUrl = prefs.getString(_serverUrlStorage) ?? _defaultUrl;
     _accessKey = prefs.getString(_accessKeyStorage) ?? '';
-    if (_token != null) {
-      isRestoringAuth = true;
-      // 兜底：若连接已建立且尚未鉴权，补发一次自动恢复登录。
-      if (_status == WsStatus.connected && !_isAuthenticated) {
-        restoreAuth();
-      }
+    isRestoringAuth = true;
+    // 兜底：若连接已建立且尚未鉴权，触发自动恢复/默认登录。
+    if (_status == WsStatus.connected && !_isAuthenticated) {
+      restoreAuth();
     }
     if (!_authInitCompleter.isCompleted) {
       _authInitCompleter.complete();
@@ -222,9 +220,7 @@ class WsService extends ChangeNotifier {
       );
       _setStatus(WsStatus.connected);
       _sendHandshake();
-      if (_token != null) {
-        restoreAuth();
-      }
+      restoreAuth();
       _startPing();
     } catch (e) {
       debugPrint('[WS] 连接失败: $e');
@@ -636,8 +632,6 @@ class WsService extends ChangeNotifier {
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
     final status = payload['status'] as String?;
 
-    // 判断这次是不是自动恢复登录（isRestoringAuth 在发 AUTH_RESTORE 前被置 true）
-    final wasRestoring = isRestoringAuth;
     isRestoringAuth = false;
 
     if (status == 'success') {
@@ -650,19 +644,13 @@ class WsService extends ChangeNotifier {
         debugPrint('[WS] Auth 成功，已保存 Token: $_token');
       }
 
-      // 自动恢复登录时加 1 秒延迟，避免直接闪跳到聊天页面
-      if (wasRestoring) {
-        await Future.delayed(const Duration(milliseconds: 1000));
-      }
-
       _isAuthenticated = true;
       // 先拿人格列表，再按激活人格拉历史，避免首次 persona_id 为空。
       _pendingInitialHistoryAfterPersonaList = true;
       requestPersonaList();
       notifyListeners();
     } else {
-      debugPrint('[WS] Auth 失败: ${payload['message']}');
-      await logout();
+      debugPrint('[WS] Auth 响应未成功: ${payload['message']}');
     }
   }
 
@@ -772,14 +760,20 @@ class WsService extends ChangeNotifier {
   }
 
   void restoreAuth() {
-    if (_status != WsStatus.connected || _token == null) return;
+    if (_status != WsStatus.connected) return;
+    isRestoringAuth = true;
     _send({
       'message_id': _genId(),
       'type': 'AUTH_RESTORE',
       'source': 'client',
       'target': 'host',
-      'payload': {'token': _token},
+      'payload': {'token': _token ?? ''},
     });
+  }
+
+  void updateNickname(String nickname) {
+    if (_status != WsStatus.connected) return;
+    register(nickname, '');
   }
 
   void sendAuthResponse(String taskId, String decision) {
@@ -920,6 +914,9 @@ class WsService extends ChangeNotifier {
     _user = null;
     _messages.clear();
     notifyListeners();
+    if (_status == WsStatus.connected) {
+      restoreAuth();
+    }
   }
 
   void removeMessages(Set<String> messageIds) {

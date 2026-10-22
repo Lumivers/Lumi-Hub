@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -33,10 +34,8 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   final _modelCtrl = TextEditingController();
   bool _savingLlm = false;
 
-  // ── Step 2: 账号 ──
-  final _usernameCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
-  bool _isLoginMode = false; // 新用户默认注册
+  // ── Step 2: 称呼设置 ──
+  final _usernameCtrl = TextEditingController(text: '开拓者');
   bool _submittingAuth = false;
 
   // ── Step 3: 完成 ──
@@ -59,7 +58,6 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     _baseUrlCtrl.dispose();
     _modelCtrl.dispose();
     _usernameCtrl.dispose();
-    _passwordCtrl.dispose();
     super.dispose();
   }
 
@@ -120,38 +118,23 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     }
   }
 
-  // ── Step 2: 注册/登录 ──
+  // ── Step 2: 设置称呼 ──
 
   Future<void> _submitAuth() async {
-    final username = _usernameCtrl.text.trim();
-    final password = _passwordCtrl.text.trim();
-    if (username.isEmpty || password.isEmpty) {
-      _showSnack('用户名和密码不能为空', isError: true);
-      return;
-    }
+    final username =
+        _usernameCtrl.text.trim().isEmpty ? '开拓者' : _usernameCtrl.text.trim();
 
-    setState(() => _submittingAuth = true);
     final ws = context.read<WsService>();
-
-    if (_isLoginMode) {
-      ws.login(username, password);
-    } else {
-      ws.register(username, password);
+    if (ws.status == WsStatus.connected) {
+      setState(() => _submittingAuth = true);
+      ws.register(username, '');
+      await _waitForAuth(const Duration(seconds: 3));
+      if (!mounted) return;
+      setState(() => _submittingAuth = false);
     }
 
-    // 等待认证结果（最多 10 秒）
-    final success = await _waitForAuth(const Duration(seconds: 10));
-    if (!mounted) return;
-    setState(() => _submittingAuth = false);
-
-    if (success) {
-      // 检测网络信息供 Step 3 使用
-      _detectNetworkInfo();
-      _goToStep(2);
-    } else {
-      _showSnack(_isLoginMode ? '登录失败，请检查用户名和密码' : '注册失败，用户名可能已存在',
-          isError: true);
-    }
+    _detectNetworkInfo();
+    _goToStep(2);
   }
 
   Future<bool> _waitForAuth(Duration timeout) async {
@@ -208,7 +191,15 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   // ── Step 3: 完成向导 ──
 
   Future<void> _finishSetup() async {
-    await context.read<BootstrapService>().markSetupCompleted();
+    final bootstrap = context.read<BootstrapService>();
+    await bootstrap.markSetupCompleted();
+    bootstrap.enterOfflineMode();
+  }
+
+  Future<void> _skipDirectlyToApp() async {
+    final bootstrap = context.read<BootstrapService>();
+    await bootstrap.markSetupCompleted();
+    bootstrap.enterOfflineMode();
   }
 
   void _showSnack(String text, {bool isError = false}) {
@@ -235,25 +226,29 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     return Scaffold(
       body: Center(
         child: Container(
-          width: 520,
+          width: 580,
           padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildStepIndicator(),
-              const SizedBox(height: 28),
-              Flexible(
-                child: PageView(
-                  controller: _pageController,
-                  physics: const NeverScrollableScrollPhysics(),
-                  children: [
-                    _buildStep1LlmConfig(bootstrap),
-                    _buildStep2Auth(bootstrap),
-                    _buildStep3Complete(bootstrap),
-                  ],
+          child: ScrollConfiguration(
+            behavior:
+                ScrollConfiguration.of(context).copyWith(scrollbars: false),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildStepIndicator(),
+                const SizedBox(height: 20),
+                Flexible(
+                  child: PageView(
+                    controller: _pageController,
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: [
+                      _buildStep1LlmConfig(bootstrap),
+                      _buildStep2Auth(bootstrap),
+                      _buildStep3Complete(bootstrap),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -263,7 +258,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   // ── 步骤指示器 ──
 
   Widget _buildStepIndicator() {
-    const labels = ['AI 配置', '账号', '完成'];
+    const labels = ['AI 配置', '你的称呼', '完成'];
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(labels.length, (i) {
@@ -340,15 +335,25 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(Icons.auto_awesome,
-                  color: Theme.of(context).colorScheme.primary, size: 28),
-              const SizedBox(width: 12),
-              Text(
-                '欢迎使用 Lumi-Hub',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+              Row(
+                children: [
+                  Icon(Icons.auto_awesome,
+                      color: Theme.of(context).colorScheme.primary, size: 28),
+                  const SizedBox(width: 12),
+                  Text(
+                    '欢迎使用 Lumi-Hub',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ],
+              ),
+              TextButton.icon(
+                onPressed: _skipDirectlyToApp,
+                icon: const Icon(Icons.arrow_forward, size: 16),
+                label: const Text('跳过配置，直接进入'),
               ),
             ],
           ),
@@ -493,10 +498,22 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
 
           const SizedBox(height: 16),
           Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              TextButton(
+                onPressed: () => _goToStep(1),
+                child: const Text('暂不配置，下一步 >'),
+              ),
               FilledButton.icon(
-                onPressed: connected && !_savingLlm ? _saveLlmConfig : null,
+                onPressed: !_savingLlm
+                    ? () async {
+                        if (connected) {
+                          await _saveLlmConfig();
+                        } else {
+                          _goToStep(1);
+                        }
+                      }
+                    : null,
                 icon: _savingLlm
                     ? const SizedBox(
                         width: 16,
@@ -504,7 +521,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.arrow_forward),
-                label: const Text('下一步'),
+                label: Text(connected ? '保存并继续' : '下一步 (离线模式)'),
               ),
             ],
           ),
@@ -513,7 +530,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     );
   }
 
-  // ── Step 2: 注册/登录 ──
+  // ── Step 2: 设置你的称呼 ──
 
   Widget _buildStep2Auth(BootstrapService bootstrap) {
     return SingleChildScrollView(
@@ -522,11 +539,11 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
         children: [
           Row(
             children: [
-              Icon(Icons.person_add,
+              Icon(Icons.face_outlined,
                   color: Theme.of(context).colorScheme.primary, size: 28),
               const SizedBox(width: 12),
               Text(
-                _isLoginMode ? '欢迎回来' : '创建你的账号',
+                '设置你的称呼',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -535,7 +552,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            _isLoginMode ? '使用已有的用户名和密码登录。' : '为你的 Lumi-Hub 创建一个本地账号。',
+            '告诉流萤该怎么称呼你，无需繁琐的账号密码。',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context)
                       .colorScheme
@@ -545,42 +562,31 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
           ),
           const SizedBox(height: 32),
 
-          // 用户名
+          // 称呼/昵称输入
           TextField(
             controller: _usernameCtrl,
             decoration: const InputDecoration(
-              labelText: '用户名',
+              labelText: '你的称呼 / 昵称',
+              hintText: '例如：开拓者、旅行者、指挥官...',
               border: OutlineInputBorder(),
               prefixIcon: Icon(Icons.person),
-            ),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 16),
-
-          // 密码
-          TextField(
-            controller: _passwordCtrl,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: '密码',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.lock),
             ),
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submitAuth(),
           ),
-          const SizedBox(height: 12),
-
-          // 切换登录/注册
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: () => setState(() => _isLoginMode = !_isLoginMode),
-              child: Text(_isLoginMode ? '没有账号？点击注册' : '已有账号？点击登录'),
+          const SizedBox(height: 16),
+          Text(
+            '提示：后续也可以在统一设置中心随时修改你的称呼。',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.5),
             ),
           ),
 
-          const SizedBox(height: 28),
+          const SizedBox(height: 36),
 
           // 按钮行
           Row(
@@ -600,7 +606,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.arrow_forward),
-                label: Text(_isLoginMode ? '登录' : '注册并继续'),
+                label: const Text('确认并继续'),
               ),
             ],
           ),
@@ -612,8 +618,10 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   // ── Step 3: 完成 ──
 
   Widget _buildStep3Complete(BootstrapService bootstrap) {
+    final isDesktop = !kIsWeb &&
+        (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
     final port = '8765'; // 默认端口
-    final adbAddr = 'ws://127.0.0.1:$port';
+    final localAddr = 'ws://127.0.0.1:$port';
     final lanAddr = _lanIp.isNotEmpty ? 'ws://$_lanIp:$port' : '';
     final publicAddr = _publicIp.isNotEmpty ? 'ws://$_publicIp:$port' : '';
 
@@ -649,13 +657,15 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
           const SizedBox(height: 8),
           _summaryTile(
             icon: Icons.person,
-            label: '账号',
-            value: _usernameCtrl.text.trim(),
+            label: '称呼',
+            value: _usernameCtrl.text.trim().isEmpty
+                ? '开拓者'
+                : _usernameCtrl.text.trim(),
           ),
 
           const SizedBox(height: 24),
 
-          // 手机连接方式
+          // 服务连接方式 / 局域网多端访问
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -667,25 +677,37 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.phone_android,
-                        size: 20,
-                        color: Theme.of(context).colorScheme.primary),
+                    Icon(
+                      isDesktop ? Icons.devices_outlined : Icons.phone_android,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                     const SizedBox(width: 8),
-                    Text('手机连接方式',
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            )),
+                    Text(
+                      isDesktop ? '服务连接与多端访问' : '连接方式',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
 
-                // ADB 转发
-                _connectionRow(
-                  emoji: '📱',
-                  label: 'ADB 转发',
-                  address: adbAddr,
-                  hint: '需执行 adb forward tcp:$port tcp:$port',
-                ),
+                // 桌面端显示本机直连，手机端显示 ADB 转发
+                if (isDesktop)
+                  _connectionRow(
+                    emoji: '💻',
+                    label: '本机直连',
+                    address: localAddr,
+                    hint: '当前电脑客户端直接连接本机 Host',
+                  )
+                else
+                  _connectionRow(
+                    emoji: '📱',
+                    label: 'ADB 转发',
+                    address: localAddr,
+                    hint: '需在电脑执行 adb forward tcp:$port tcp:$port',
+                  ),
                 const SizedBox(height: 8),
 
                 // 局域网
@@ -693,7 +715,9 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                   emoji: '🏠',
                   label: '局域网',
                   address: lanAddr.isNotEmpty ? lanAddr : null,
-                  hint: _detectingNetwork ? '正在检测...' : '未检测到局域网 IP',
+                  hint: _detectingNetwork
+                      ? '正在检测...'
+                      : (isDesktop ? '可供手机或局域网其他设备连接' : '未检测到局域网 IP'),
                 ),
                 const SizedBox(height: 8),
 
@@ -907,10 +931,21 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: bootstrap.retry,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('重试'),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: bootstrap.retry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('重试连接'),
+                    ),
+                    const SizedBox(width: 12),
+                    OutlinedButton.icon(
+                      onPressed: bootstrap.enterOfflineMode,
+                      icon: const Icon(Icons.arrow_forward),
+                      label: const Text('跳过，直接进入'),
+                    ),
+                  ],
                 ),
               ],
             ],
@@ -924,6 +959,8 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
     switch (stage) {
       case BootstrapStage.init:
         return '正在初始化...';
+      case BootstrapStage.startingHost:
+        return '正在启动内核服务...';
       case BootstrapStage.connectingWs:
         return '正在连接 Host...';
       case BootstrapStage.checkingConfig:
