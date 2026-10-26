@@ -10,6 +10,10 @@ class _BubbleItem extends StatefulWidget {
   final bool isTtsGenerating;
   final bool isTtsPlaying;
   final VoidCallback onReadAloudTap;
+  final bool isLastUserMessage;
+  final VoidCallback? onRecallMessage;
+  final bool isEarlierUserMessage;
+  final VoidCallback? onRewindToHere;
 
   const _BubbleItem({
     super.key,
@@ -22,6 +26,10 @@ class _BubbleItem extends StatefulWidget {
     required this.isTtsGenerating,
     required this.isTtsPlaying,
     required this.onReadAloudTap,
+    this.isLastUserMessage = false,
+    this.onRecallMessage,
+    this.isEarlierUserMessage = false,
+    this.onRewindToHere,
   });
 
   @override
@@ -180,27 +188,71 @@ class _BubbleItemState extends State<_BubbleItem> {
     );
   }
 
+  Widget _buildMarkdownContent(Color textColor) {
+    return MarkdownBody(
+      data: widget.msg.content,
+      // 文本选择统一交给列表层 SelectionArea，避免嵌套选择器造成跨空格/跨气泡拖选异常。
+      selectable: false,
+      styleSheet: MarkdownStyleSheet(
+        p: TextStyle(
+          color: textColor,
+          fontSize: 14,
+          height: 1.4,
+          fontFamilyFallback: AppTheme.fallbackFonts,
+        ),
+        listBullet: TextStyle(
+          color: textColor,
+          fontSize: 14,
+          fontFamilyFallback: AppTheme.fallbackFonts,
+        ),
+        code: const TextStyle(
+          color: Color(0xFF79C0FF),
+          fontFamilyFallback: AppTheme.monoFonts,
+          fontSize: 13,
+        ),
+        codeblockDecoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: const Color(0xFF282C34),
+        ),
+        blockquoteDecoration: BoxDecoration(
+          color: widget.colors.sidebar.withValues(alpha: 0.5),
+          border: Border(
+            left: BorderSide(color: widget.colors.accent, width: 4),
+          ),
+        ),
+      ),
+      builders: {'code': CodeElementBuilder()},
+    );
+  }
+
   Widget _buildBubbleContent(Color textColor) {
-    final traces = (widget.msg.extra?['traces'] as List?)
-        ?.whereType<Map<String, dynamic>>()
+    final tracesRaw = widget.msg.extra?['traces'] as List?;
+    final traces = tracesRaw
+        ?.map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+
+    final filesRaw = widget.msg.extra?['files_changed'] ??
+        widget.msg.extra?['trace_summary']?['files_changed'];
+    final filesChanged = (filesRaw as List?)
+        ?.map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
     if (widget.msg.isTyping) {
-      if (traces != null && traces.isNotEmpty) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TraceTimelineWidget(
-              traces: traces,
-              colors: widget.colors,
-              isGenerating: true,
-            ),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.msg.content.isNotEmpty)
+            _buildMarkdownContent(textColor),
+          TraceTimelineWidget(
+            traces: traces ?? const [],
+            colors: widget.colors,
+            isGenerating: true,
+          ),
+          if (widget.msg.content.isNotEmpty)
             _TypingIndicator(color: textColor),
-          ],
-        );
-      }
-      return _TypingIndicator(color: textColor);
+        ],
+      );
     }
 
     if (_isImageBubble) {
@@ -249,46 +301,19 @@ class _BubbleItemState extends State<_BubbleItem> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (widget.msg.content.isNotEmpty)
+          _buildMarkdownContent(textColor),
         if (traces != null && traces.isNotEmpty)
           TraceTimelineWidget(
             traces: traces,
             colors: widget.colors,
             isGenerating: false,
           ),
-        MarkdownBody(
-          data: widget.msg.content,
-          // 文本选择统一交给列表层 SelectionArea，避免嵌套选择器造成跨空格/跨气泡拖选异常。
-          selectable: false,
-          styleSheet: MarkdownStyleSheet(
-            p: TextStyle(
-              color: textColor,
-              fontSize: 14,
-              height: 1.4,
-              fontFamilyFallback: AppTheme.fallbackFonts,
-            ),
-            listBullet: TextStyle(
-              color: textColor,
-              fontSize: 14,
-              fontFamilyFallback: AppTheme.fallbackFonts,
-            ),
-            code: const TextStyle(
-              color: Color(0xFF79C0FF),
-              fontFamilyFallback: AppTheme.monoFonts,
-              fontSize: 13,
-            ),
-            codeblockDecoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              color: const Color(0xFF282C34),
-            ),
-            blockquoteDecoration: BoxDecoration(
-              color: widget.colors.sidebar.withValues(alpha: 0.5),
-              border: Border(
-                left: BorderSide(color: widget.colors.accent, width: 4),
-              ),
-            ),
+        if (filesChanged != null && filesChanged.isNotEmpty)
+          FilesChangedWidget(
+            files: filesChanged,
+            colors: widget.colors,
           ),
-          builders: {'code': CodeElementBuilder()},
-        ),
       ],
     );
   }
@@ -309,7 +334,11 @@ class _BubbleItemState extends State<_BubbleItem> {
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
         final size = MediaQuery.of(dialogContext).size;
         const menuWidth = 156.0;
-        final menuHeight = isMe ? 92.0 : 136.0;
+        final menuHeight = isMe
+            ? ((widget.isLastUserMessage || widget.isEarlierUserMessage)
+                ? 136.0
+                : 92.0)
+            : 136.0;
         const screenPadding = 8.0;
         final left = position.dx
             .clamp(screenPadding, size.width - menuWidth - screenPadding)
@@ -393,6 +422,20 @@ class _BubbleItemState extends State<_BubbleItem> {
                               topRight: Radius.circular(14),
                             ),
                           ),
+                          if (isMe && widget.isLastUserMessage)
+                            menuItem(
+                              value: 'recall',
+                              icon: Icons.undo_rounded,
+                              text: '撤回提问',
+                              color: widget.colors.accent,
+                            ),
+                          if (isMe && widget.isEarlierUserMessage)
+                            menuItem(
+                              value: 'rewind',
+                              icon: Icons.history_rounded,
+                              text: '回退到此节点',
+                              color: const Color(0xFFE5C07B),
+                            ),
                           if (!isMe)
                             menuItem(
                               value: 'export_image',
@@ -428,7 +471,11 @@ class _BubbleItemState extends State<_BubbleItem> {
 
     if (!context.mounted) return;
 
-    if (value == 'copy') {
+    if (value == 'recall') {
+      widget.onRecallMessage?.call();
+    } else if (value == 'rewind') {
+      widget.onRewindToHere?.call();
+    } else if (value == 'copy') {
       await Clipboard.setData(ClipboardData(text: widget.msg.content));
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -555,6 +602,23 @@ class _BubbleItemState extends State<_BubbleItem> {
             ),
           ),
           const SizedBox(width: 8),
+          if (widget.isLastUserMessage) ...[
+            _buildActionIcon(
+              icon: Icons.undo_rounded,
+              tooltip: '撤回并重新编辑',
+              onPressed: widget.onRecallMessage,
+              color: widget.colors.accent,
+            ),
+            const SizedBox(width: 4),
+          ] else if (widget.isEarlierUserMessage) ...[
+            _buildActionIcon(
+              icon: Icons.history_rounded,
+              tooltip: '回退到此检查点',
+              onPressed: widget.onRewindToHere,
+              color: const Color(0xFFE5C07B),
+            ),
+            const SizedBox(width: 4),
+          ],
           _buildActionIcon(
             icon: Icons.copy_rounded,
             tooltip: '复制',

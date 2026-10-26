@@ -468,38 +468,41 @@ class _SidebarState extends State<_Sidebar> {
           // ── 统一设置中心入口 ──
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-            child: ListTile(
-              dense: true,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              hoverColor: colors.accent.withValues(alpha: 0.1),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-              leading: Icon(
-                Icons.settings_outlined,
-                color: colors.subtext,
-                size: 20,
-              ),
-              title: Text(
-                '设置中心',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
+            child: Material(
+              color: Colors.transparent,
+              child: ListTile(
+                dense: true,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
                 ),
+                hoverColor: colors.accent.withValues(alpha: 0.1),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                leading: Icon(
+                  Icons.settings_outlined,
+                  color: colors.subtext,
+                  size: 20,
+                ),
+                title: Text(
+                  '设置中心',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                trailing: Icon(
+                  Icons.chevron_right,
+                  color: colors.subtext.withValues(alpha: 0.5),
+                  size: 18,
+                ),
+                onTap: () {
+                  SettingsHubDialog.show(
+                    context,
+                    ws: ws,
+                    colors: colors,
+                  );
+                },
               ),
-              trailing: Icon(
-                Icons.chevron_right,
-                color: colors.subtext.withValues(alpha: 0.5),
-                size: 18,
-              ),
-              onTap: () {
-                SettingsHubDialog.show(
-                  context,
-                  ws: ws,
-                  colors: colors,
-                );
-              },
             ),
           ),
           const SizedBox(height: 6),

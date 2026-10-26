@@ -43,6 +43,7 @@ from .native_tools import (
     search_workspace as native_search_workspace,
     grep_code as native_grep_code,
     find_symbol as native_find_symbol,
+    revert_file as native_revert_file,
 )
 from .handlers import (
     AuthHandlersMixin,
@@ -121,11 +122,16 @@ class LumiHubApp(
         self._voice_turn_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._setup_voice_extensions()
 
+        # 正在执行中的 AgentLoop (keyed by session_id and ws_session_id)
+        self._active_agents: dict[str, AgentLoop] = {}
+
         # WebSocket 消息路由表
         self._message_handlers: dict[
             str, Callable[[dict, str], Coroutine[Any, Any, None]]
         ] = {
             "CHAT_REQUEST": self._handle_chat_request,
+            "CHAT_CANCEL": self._handle_chat_cancel,
+            "CHAT_INTERRUPT": self._handle_chat_cancel,
             "PERSONA_SWITCH": self._handle_persona_switch,
             "PERSONA_LIST": self._handle_persona_list,
             "AUTH_REGISTER": self._handle_auth_register,
@@ -136,6 +142,7 @@ class LumiHubApp(
             "MCP_CONFIG_UPDATE": self._handle_mcp_config_update,
             "PERSONA_CLEAR_HISTORY": self._handle_persona_clear_history,
             "MESSAGE_DELETE": self._handle_message_delete,
+            "REVERT_FILES": self._handle_revert_files,
             "PERSONA_DELETE": self._handle_persona_delete,
             "FILE_UPLOAD_INIT": self._handle_file_upload_init,
             "FILE_UPLOAD_CHUNK": self._handle_file_upload_chunk,
@@ -496,6 +503,7 @@ class LumiHubApp(
                     client_msg_id=f"{msg_id}_att_{file_name}",
                     persona_id=persona_id,
                     session_id=session_id,
+                    extra=att,
                 )
 
         if original_user_content:
@@ -569,8 +577,87 @@ class LumiHubApp(
             workspace_dir=workspace_path,
         )
 
+        # 记录正在运行的 agent
+        agent_key = session_id or ws_session_id
+        old_agent = self._active_agents.get(agent_key)
+        if old_agent:
+            old_agent.cancel()
+
+        self._active_agents[agent_key] = agent
+        self._active_agents[ws_session_id] = agent
+
+        async def run_agent_and_cleanup():
+            try:
+                await agent.run(user_content, attachments)
+            finally:
+                if self._active_agents.get(agent_key) is agent:
+                    self._active_agents.pop(agent_key, None)
+                if self._active_agents.get(ws_session_id) is agent:
+                    self._active_agents.pop(ws_session_id, None)
+
         # 异步执行 Agent
-        asyncio.create_task(agent.run(user_content, attachments))
+        asyncio.create_task(run_agent_and_cleanup())
+
+    async def _handle_chat_cancel(self, message: dict, ws_session_id: str) -> None:
+        """处理 CHAT_CANCEL / CHAT_INTERRUPT：打断当前正在执行的 AgentLoop。"""
+        payload = message.get("payload", {})
+        session_id = payload.get("session_id")
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+
+        logger.info(f"[Lumi-Hub] 收到用户打断请求 (session={session_id}, ws={ws_session_id})")
+
+        interrupted = False
+        if session_id and session_id in self._active_agents:
+            agent = self._active_agents.get(session_id)
+            if agent:
+                agent.cancel()
+                interrupted = True
+
+        for key, agent in list(self._active_agents.items()):
+            if agent.ws_session_id == ws_session_id:
+                agent.cancel()
+                interrupted = True
+
+        await self.ws_server.send_to_client(
+            ws_session_id,
+            {
+                "message_id": msg_id,
+                "type": "CHAT_RESPONSE_END",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "interrupted": True,
+                    "session_id": session_id,
+                },
+            },
+        )
+
+    async def _handle_revert_files(self, message: dict, ws_session_id: str) -> None:
+        """处理 REVERT_FILES：批量回退指定文件的代码修改。"""
+        msg_id = message.get("message_id", "")
+        payload = message.get("payload", {})
+        file_paths = payload.get("files", [])
+        workspace_path = payload.get("workspace_path") or self._active_workspace
+        results = []
+        for p in file_paths:
+            ok, msg = native_revert_file(p, workspace_dir=workspace_path)
+            results.append({"path": p, "success": ok, "message": msg})
+
+        await self.ws_server.send_to_client(
+            ws_session_id,
+            {
+                "message_id": msg_id,
+                "type": "REVERT_FILES_RESPONSE",
+                "source": "host",
+                "target": "client",
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "status": "success",
+                    "results": results,
+                },
+            },
+        )
 
     async def _handle_client_message(self, message: dict, ws_session_id: str) -> None:
         """处理从 WebSocket Client 收到的业务消息。"""
@@ -583,6 +670,11 @@ class LumiHubApp(
 
     async def _handle_ws_disconnect(self, ws_session_id: str) -> None:
         """WebSocket 断开后的资源清理。"""
+        # 清理运行中的 Agent
+        agent = self._active_agents.pop(ws_session_id, None)
+        if agent:
+            agent.cancel()
+
         self.active_sessions.pop(ws_session_id, None)
         self.ws_server.unregister_user(ws_session_id)
 

@@ -14,8 +14,8 @@ from .trace_collector import TraceCollector, StepTrace
 
 logger = logging.getLogger("lumi")
 
-# ReAct 循环最大迭代次数，防止死循环
-MAX_ITERATIONS = 20
+# ReAct 循环最大迭代次数，保证复杂代码任务有足够深度，同时防止死循环
+MAX_ITERATIONS = 40
 
 # 历史对话 Token 阈值，超过则触发滑动窗口摘要提炼
 HISTORY_TOKEN_THRESHOLD = 3000
@@ -224,6 +224,7 @@ class AgentLoop:
             tool_schemas = await self.tools.get_all_schemas_with_mcp()
 
             # ReAct 循环
+            full_text = ""
             for iteration in range(MAX_ITERATIONS):
                 if self._cancelled:
                     logger.info(f"[AgentLoop] Agent 已被取消 (session={self.session_id})")
@@ -232,6 +233,14 @@ class AgentLoop:
                 # 准备送入 LLM 的 messages (进行过桥抽板剪枝)
                 prepared_messages = self._compact_messages(messages, keep_recent_tools=2)
 
+                # 最后一轮强制不再提供工具，促使模型输出最终综合总结，避免静默结束
+                tools_for_step = tool_schemas if (tool_schemas and iteration < MAX_ITERATIONS - 1) else None
+                if iteration == MAX_ITERATIONS - 1 and tool_schemas:
+                    prepared_messages.append({
+                        "role": "user",
+                        "content": "【系统提示】已接近单次任务步数上限，请基于前面所有工具已获取的信息，输出完整、清晰的分析与最终总结，不要再调用任何工具。",
+                    })
+
                 # 调用 LLM
                 full_text = ""
                 tool_calls = None
@@ -239,7 +248,7 @@ class AgentLoop:
 
                 async for event in self.llm.chat_stream(
                     messages=prepared_messages,
-                    tools=tool_schemas if tool_schemas else None,
+                    tools=tools_for_step,
                 ):
                     if self._cancelled:
                         break
@@ -340,6 +349,14 @@ class AgentLoop:
                         await self._send_trace_step_update(step)
                         await self._send_tool_call_result(tool_name, success, step.output_summary)
 
+                        if success and tool_name in ("write_file", "insert_content", "replace_content", "search_replace"):
+                            file_p = tool_args.get("path")
+                            if file_p:
+                                self.trace_collector.record_file_changed(file_p)
+
+                        # 每步工具执行完成后立即持久化 Trace 状态，避免进程中断后丢失
+                        self._persist_current_state(full_text=full_text)
+
                         # 将工具结果回填到 messages (保持未经裁剪的完整输出，供下一轮即时消费)
                         messages.append({
                             "role": "tool",
@@ -351,16 +368,8 @@ class AgentLoop:
                     continue
 
                 else:
-                    # 纯文本回复，保存到数据库
-                    if full_text and self.db and self.user_id:
-                        self.db.save_message(
-                            user_id=self.user_id,
-                            role="assistant",
-                            content=full_text,
-                            client_msg_id=f"{self.msg_id}_ai",
-                            persona_id=self.persona_id,
-                            session_id=self.session_id,
-                        )
+                    # 纯文本回复，保存到数据库及 Trace 状态
+                    self._persist_current_state(full_text=full_text)
 
                     # 触发记忆提取（异步，不阻塞回复）
                     if self.memory_manager and full_text:
@@ -370,8 +379,36 @@ class AgentLoop:
 
                     break
 
+            # 尝试通过 git diff 检测本次任务产生的文件变动
+            if self.workspace_dir and os.path.exists(os.path.join(self.workspace_dir, ".git")):
+                try:
+                    import subprocess
+                    proc = subprocess.run(
+                        ["git", "diff", "--numstat"],
+                        cwd=self.workspace_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                    )
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        for line in proc.stdout.strip().splitlines():
+                            parts = line.split("\t")
+                            if len(parts) >= 3:
+                                add, dele, rel_p = parts[0], parts[1], parts[2]
+                                full_p = os.path.normpath(os.path.join(self.workspace_dir, rel_p))
+                                self.trace_collector.record_file_changed(
+                                    full_p,
+                                    additions=int(add) if add.isdigit() else 0,
+                                    deletions=int(dele) if dele.isdigit() else 0,
+                                )
+                except Exception as e:
+                    logger.debug(f"[AgentLoop] git diff 提取变动文件失败: {e}")
+
             # 发送 Trace 完整汇总
             await self._send_trace_summary()
+
+            # 将包含全部变动文件的最新 Trace 状态落库
+            self._persist_current_state(full_text=full_text)
 
             # 发送结束信号
             await self._send_chat_end()
@@ -380,6 +417,9 @@ class AgentLoop:
             logger.error(f"[AgentLoop] 运行异常: {e}", exc_info=True)
             await self._send_error(f"Agent 运行异常: {e}")
             await self._send_chat_end()
+        finally:
+            # 无论正常结束、用户取消还是异常中断，均确保当前 Trace 与文本落库保存
+            self._persist_current_state(full_text=full_text)
 
     async def _send_event(self, message: dict):
         """统一向用户的所有在线端广播事件；若无 user_id 则单播至当前连接。"""
@@ -616,7 +656,7 @@ class AgentLoop:
     async def _send_trace_summary(self):
         """通知客户端本次对话的完整 Trace 汇总。"""
         summary = self.trace_collector.export_summary()
-        if summary.get("step_count", 0) > 0:
+        if summary.get("step_count", 0) > 0 or summary.get("files_changed"):
             msg = {
                 "message_id": self.msg_id,
                 "type": "TRACE_SUMMARY",
@@ -626,6 +666,32 @@ class AgentLoop:
                 "payload": summary,
             }
             await self._send_event(msg)
+
+    def _persist_current_state(self, full_text: str = ""):
+        """将当前生成的回复内容与收集到的工具调用轨迹 (Trace) 持久化至数据库。"""
+        if not (self.db and self.user_id):
+            return
+        summary = self.trace_collector.export_summary()
+        has_traces = summary.get("step_count", 0) > 0 or bool(summary.get("files_changed"))
+        if not (full_text or has_traces):
+            return
+        extra_data = {
+            "traces": summary.get("steps", []),
+            "trace_summary": summary,
+            "files_changed": summary.get("files_changed", []),
+        } if has_traces else None
+        try:
+            self.db.save_message(
+                user_id=self.user_id,
+                role="assistant",
+                content=full_text,
+                client_msg_id=f"{self.msg_id}_ai",
+                persona_id=self.persona_id,
+                session_id=self.session_id,
+                extra=extra_data,
+            )
+        except Exception as e:
+            logger.warning(f"[AgentLoop] 实时持久化 Trace 异常: {e}")
 
     def _compact_messages(self, messages: list[dict], keep_recent_tools: int = 2) -> list[dict]:
         """Observation Compaction (过桥抽板):

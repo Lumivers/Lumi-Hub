@@ -63,6 +63,8 @@ class Message(Base):
     
     # 防止多端同步时出现重复 id（前端 message_id 可落这里）。
     client_msg_id = Column(String(64), nullable=True, unique=True)
+    # 扩展数据 (JSON 字符串，存储 Agent 执行的 Step Trace 时间线、文件修改记录等)
+    extra = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="messages")
     session = relationship("Session", back_populates="messages")
@@ -116,7 +118,7 @@ def init_db(db_path: str):
     engine = create_engine(f"sqlite:///{db_path}", echo=False)
     Base.metadata.create_all(engine)
 
-    # 动态平滑迁移：检查 messages 表是否已有 session_id 字段
+    # 动态平滑迁移：检查 messages 表是否已有 session_id 与 extra 字段
     try:
         with engine.connect() as conn:
             result = conn.execute(text("PRAGMA table_info(messages)"))
@@ -124,8 +126,11 @@ def init_db(db_path: str):
             if "session_id" not in columns:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN session_id VARCHAR(64)"))
                 conn.commit()
+            if "extra" not in columns:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN extra TEXT"))
+                conn.commit()
     except Exception as e:
         import logging
-        logging.getLogger("lumi").warning(f"[DB Migration] 检查/迁移 session_id 字段: {e}")
+        logging.getLogger("lumi").warning(f"[DB Migration] 检查/迁移 messages 字段: {e}")
 
     return sessionmaker(bind=engine)

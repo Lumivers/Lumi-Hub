@@ -1,4 +1,5 @@
 import os
+import json
 import secrets
 import hashlib
 import datetime
@@ -274,8 +275,10 @@ class DatabaseManager:
         client_msg_id: str = None,
         persona_id: str = 'default',
         session_id: str = None,
+        extra: dict | str = None,
     ) -> dict:
         """保存单条消息记录，并同步更新所属会话的时间与自动标题"""
+        extra_str = json.dumps(extra, ensure_ascii=False) if isinstance(extra, dict) else (extra if isinstance(extra, str) else None)
         with self.SessionLocal() as session:
             if client_msg_id:
                 # 幂等写入：相同 client_msg_id 走更新路径。
@@ -292,9 +295,17 @@ class DatabaseManager:
                     else:
                         existing.content = content
                     existing.type = msg_type
+                    if extra is not None:
+                        existing.extra = extra_str
                     existing.timestamp = datetime.datetime.now(timezone.utc)
                     session.commit()
                     session.refresh(existing)
+                    extra_val = None
+                    if existing.extra:
+                        try:
+                            extra_val = json.loads(existing.extra) if isinstance(existing.extra, str) else existing.extra
+                        except Exception:
+                            pass
                     return {
                         "id": existing.id,
                         "role": existing.role,
@@ -302,6 +313,7 @@ class DatabaseManager:
                         "type": existing.type,
                         "session_id": existing.session_id,
                         "persona_id": existing.persona_id,
+                        "extra": extra_val,
                         "timestamp": int(existing.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
                     }
 
@@ -312,7 +324,8 @@ class DatabaseManager:
                 role=role,
                 content=content,
                 type=msg_type,
-                client_msg_id=client_msg_id
+                client_msg_id=client_msg_id,
+                extra=extra_str,
             )
             session.add(msg)
 
@@ -330,6 +343,13 @@ class DatabaseManager:
             session.commit()
             session.refresh(msg)
             
+            extra_val = None
+            if msg.extra:
+                try:
+                    extra_val = json.loads(msg.extra) if isinstance(msg.extra, str) else msg.extra
+                except Exception:
+                    pass
+
             return {
                 "id": msg.id,
                 "role": msg.role,
@@ -337,6 +357,7 @@ class DatabaseManager:
                 "type": msg.type,
                 "session_id": msg.session_id,
                 "persona_id": msg.persona_id,
+                "extra": extra_val,
                 "timestamp": int(msg.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
             }
 
@@ -417,6 +438,12 @@ class DatabaseManager:
             
             result = []
             for msg in messages:
+                extra_val = None
+                if getattr(msg, "extra", None):
+                    try:
+                        extra_val = json.loads(msg.extra) if isinstance(msg.extra, str) else msg.extra
+                    except Exception:
+                        pass
                 result.append({
                     "message_id": msg.client_msg_id or str(msg.id),
                     "role": msg.role,
@@ -424,6 +451,7 @@ class DatabaseManager:
                     "type": msg.type,
                     "session_id": msg.session_id,
                     "persona_id": msg.persona_id,
+                    "extra": extra_val,
                     "timestamp": int(msg.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000)
                 })
             return result

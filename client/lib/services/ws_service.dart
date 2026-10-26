@@ -399,6 +399,23 @@ class WsService extends ChangeNotifier {
     });
   }
 
+  /// 打断当前正在进行的 AI 生成/工具执行
+  void cancelCurrentGeneration() {
+    if (!_isGenerating) return;
+    _send({
+      'type': 'CHAT_CANCEL',
+      'source': 'client',
+      'target': 'host',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': {
+        'session_id': _activeSessionId,
+      },
+    });
+    _isGenerating = false;
+    _generationUnlockTimer?.cancel();
+    notifyListeners();
+  }
+
   // ── 内部 ───────────────────────────────────────────────────────────────
 
   void _onData(dynamic raw) {
@@ -430,6 +447,10 @@ class WsService extends ChangeNotifier {
           break;
         case 'TRACE_SUMMARY':
           _handleTraceSummary(data);
+          break;
+        case 'TOOL_CALL_START':
+        case 'TOOL_CALL_RESULT':
+          // 工具调用生命周期由 TRACE_STEP_UPDATE 统一驱动与展示，忽略低层兼容通知
           break;
         case 'PONG':
           // 心跳回应，忽略
@@ -726,6 +747,9 @@ class WsService extends ChangeNotifier {
       final msg = _messages[targetIdx];
       final currentExtra = Map<String, dynamic>.from(msg.extra ?? {});
       currentExtra['trace_summary'] = payload;
+      if (payload['files_changed'] != null) {
+        currentExtra['files_changed'] = payload['files_changed'];
+      }
       _messages[targetIdx] = msg.copyWith(extra: currentExtra);
       notifyListeners();
     }
@@ -777,6 +801,25 @@ class WsService extends ChangeNotifier {
     for (var m in messagesJson) {
       final msg = m as Map<String, dynamic>;
       final isMe = msg['role'] == 'user';
+      final extraRaw = msg['extra'];
+      Map<String, dynamic>? extraMap;
+      if (extraRaw is Map) {
+        extraMap = Map<String, dynamic>.from(extraRaw);
+      }
+
+      // 同步恢复历史中的 Trace 执行轨迹至本地缓存
+      if (extraMap != null && extraMap['traces'] is List) {
+        final rawId = msg['message_id']?.toString() ?? '';
+        final baseMsgId = rawId.replaceAll(RegExp(r'_ai$'), '');
+        if (baseMsgId.isNotEmpty) {
+          final list = (extraMap['traces'] as List)
+              .whereType<Map<dynamic, dynamic>>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+          _traceCache[baseMsgId] = list;
+        }
+      }
+
       loaded.add(
         ChatMessage(
           id: msg['message_id']?.toString() ?? _genId(),
@@ -785,6 +828,7 @@ class WsService extends ChangeNotifier {
           time: DateTime.fromMillisecondsSinceEpoch(
             (msg['timestamp'] as num).toInt(),
           ),
+          extra: extraMap,
         ),
       );
     }
@@ -1263,6 +1307,111 @@ class WsService extends ChangeNotifier {
   void clearLocalMessages() {
     _messages.clear();
     notifyListeners();
+  }
+
+  /// 回退指定文件的代码修改 (支持 Git checkout 与 .Lumi_cache 备份还原)
+  Future<List<Map<String, dynamic>>> revertFiles(List<String> filePaths) async {
+    if (filePaths.isEmpty || _status != WsStatus.connected) return [];
+    final resp = await sendRequest('REVERT_FILES', {
+      'files': filePaths,
+      'workspace_path': _activeWorkspacePath,
+    });
+    if (resp != null && resp['payload']?['results'] != null) {
+      final list = resp['payload']['results'] as List<dynamic>? ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    return [];
+  }
+
+  /// 获取当前会话中最后一条用户提问消息（排除单纯附件气泡）
+  ChatMessage? get lastUserMessage {
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (m.sender == MessageSender.me &&
+          !m.content.startsWith('[附件] ') &&
+          !m.content.startsWith('[图片] ')) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  /// 判断指定消息是否为当前最新的（即最后一条）用户提问
+  bool isLastUserMessage(String id) {
+    return lastUserMessage?.id == id;
+  }
+
+  /// 判断指定消息是否为更早的历史用户提问（可回滚节点）
+  bool isEarlierUserMessage(String id) {
+    final last = lastUserMessage;
+    if (last == null || last.id == id) return false;
+    final idx = _messages.indexWhere((m) => m.id == id);
+    if (idx == -1) return false;
+    final msg = _messages[idx];
+    return msg.sender == MessageSender.me &&
+        !msg.content.startsWith('[附件] ') &&
+        !msg.content.startsWith('[图片] ');
+  }
+
+  /// 获取从指定用户提问（包含其附件）开始一直到当前会话末尾的所有消息
+  List<ChatMessage> getMessagesFromUserOnwards(String userMsgId) {
+    final attId = '${userMsgId}_att';
+    int startIdx = _messages.indexWhere((m) => m.id == attId);
+    if (startIdx == -1) {
+      startIdx = _messages.indexWhere((m) => m.id == userMsgId);
+    }
+    if (startIdx == -1) return [];
+    return _messages.sublist(startIdx);
+  }
+
+  /// 收集从指定用户提问开始之后所有助手回复中变动过的文件
+  List<Map<String, dynamic>> getFilesChangedFromUserOnwards(String userMsgId) {
+    final msgs = getMessagesFromUserOnwards(userMsgId);
+    final fileMap = <String, Map<String, dynamic>>{};
+    for (final m in msgs) {
+      if (m.sender == MessageSender.ai) {
+        final raw = m.extra?['files_changed'] ??
+            m.extra?['trace_summary']?['files_changed'];
+        final list =
+            (raw as List?)?.whereType<Map<dynamic, dynamic>>().toList() ?? [];
+        for (final item in list) {
+          final f = Map<String, dynamic>.from(item);
+          final path = f['path'] as String? ?? '';
+          if (path.isNotEmpty) {
+            fileMap[path] = f;
+          }
+        }
+      }
+    }
+    return fileMap.values.toList();
+  }
+
+  /// 获取与指定用户消息对应的助手消息（或正在生成的占位消息）
+  ChatMessage? getAssistantMessageForUser(String userMsgId) {
+    final asstId = _assistantMsgId(userMsgId);
+    final typingId = '${userMsgId}_typing';
+    final target = _messages.where((m) => m.id == asstId || m.id == typingId);
+    if (target.isNotEmpty) return target.first;
+
+    final userIdx = _messages.indexWhere((m) => m.id == userMsgId);
+    if (userIdx != -1 && userIdx + 1 < _messages.length) {
+      final next = _messages[userIdx + 1];
+      if (next.sender == MessageSender.ai) return next;
+    }
+    return null;
+  }
+
+  /// 获取本轮对话关联的所有消息 ID（包括用户提问、附件、助手回复及 typing 占位）
+  Set<String> getTurnMessageIds(String userMsgId) {
+    final ids = <String>{
+      userMsgId,
+      '${userMsgId}_att',
+      '${userMsgId}_typing',
+      _assistantMsgId(userMsgId),
+    };
+    final asst = getAssistantMessageForUser(userMsgId);
+    if (asst != null) ids.add(asst.id);
+    return ids;
   }
 
   void _onError(Object error) {

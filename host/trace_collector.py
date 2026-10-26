@@ -57,6 +57,28 @@ class TraceCollector:
         self.msg_id = msg_id
         self.steps: list[StepTrace] = []
         self._current_step_id = 0
+        self.files_changed: list[dict] = []
+        self._changed_paths: set[str] = set()
+
+    def record_file_changed(self, file_path: str, additions: int = 0, deletions: int = 0):
+        """记录本次对话修改的文件。"""
+        import os
+        norm_path = os.path.normpath(file_path)
+        for f in self.files_changed:
+            if f["path"] == norm_path:
+                if additions:
+                    f["additions"] = additions
+                if deletions:
+                    f["deletions"] = deletions
+                return
+        self.files_changed.append({
+            "path": norm_path,
+            "name": os.path.basename(norm_path),
+            "dir": os.path.dirname(norm_path),
+            "additions": additions,
+            "deletions": deletions,
+        })
+        self._changed_paths.add(norm_path)
 
     def start_step(self, tool_name: str, tool_args: dict) -> StepTrace:
         self._current_step_id += 1
@@ -79,4 +101,5 @@ class TraceCollector:
             "step_count": len(self.steps),
             "total_tool_duration_ms": total_duration,
             "steps": [s.to_dict() for s in self.steps],
+            "files_changed": self.files_changed,
         }

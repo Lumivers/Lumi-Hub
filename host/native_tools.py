@@ -65,6 +65,69 @@ def backup_file(path: str) -> bool:
         logger.error(f"[Lumi-Hub] 备份失败! 路径: {path}, 错误: {str(e)}")
         return False
 
+def revert_file(path: str, workspace_dir: str = None) -> tuple[bool, str]:
+    """回退单个文件的修改。优先使用 Git restore，如果未纳入版本控制，尝试从 .Lumi_cache 恢复最近的备份。"""
+    import subprocess
+    try:
+        abs_path = os.path.abspath(path)
+        base_dir = os.path.dirname(abs_path)
+        ws = workspace_dir or base_dir
+
+        # 1. 优先尝试 Git 还原
+        git_dir = os.path.join(ws, ".git") if os.path.isdir(ws) else None
+        if not git_dir and os.path.exists(os.path.join(base_dir, ".git")):
+            git_dir = os.path.join(base_dir, ".git")
+            ws = base_dir
+
+        if git_dir and os.path.exists(git_dir):
+            # 检查文件是否为未跟踪的新文件
+            status_proc = subprocess.run(
+                ["git", "status", "--porcelain", abs_path],
+                cwd=ws,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            out = status_proc.stdout.strip()
+            if out.startswith("??"):
+                # 新建未跟踪文件：直接删除
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+                    logger.info(f"[Lumi-Hub] 回退代码：已删除新建文件 {abs_path}")
+                    return True, f"已删除新建的文件 {os.path.basename(abs_path)}"
+            else:
+                # 已跟踪的文件变更：使用 git checkout 还原
+                restore_proc = subprocess.run(
+                    ["git", "checkout", "--", abs_path],
+                    cwd=ws,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if restore_proc.returncode == 0:
+                    logger.info(f"[Lumi-Hub] 回退代码：Git 已还原 {abs_path}")
+                    return True, f"已通过 Git 还原 {os.path.basename(abs_path)}"
+
+        # 2. 从 .Lumi_cache 备份还原
+        cache_dir = os.path.join(base_dir, ".Lumi_cache")
+        filename = os.path.basename(abs_path)
+        if os.path.isdir(cache_dir):
+            bak_files = [
+                f for f in os.listdir(cache_dir)
+                if f.startswith(f"{filename}.") and f.endswith(".bak")
+            ]
+            if bak_files:
+                bak_files.sort(reverse=True)
+                latest_bak = os.path.join(cache_dir, bak_files[0])
+                shutil.copy2(latest_bak, abs_path)
+                logger.info(f"[Lumi-Hub] 回退代码：已从备份还原 {abs_path} <- {latest_bak}")
+                return True, f"已从备份文件还原 {filename}"
+
+        return False, f"未找到 {filename} 的还原方式（无 Git 变更或备份）"
+    except Exception as e:
+        logger.error(f"[Lumi-Hub] 回退文件失败! 路径: {path}, 错误: {e}")
+        return False, f"还原 {path} 失败: {e}"
+
 def list_dir(path: str) -> str:
     """列出目录下文件"""
     try:

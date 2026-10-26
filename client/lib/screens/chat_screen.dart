@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
@@ -420,6 +422,382 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _handleRecallMessage(WsService ws, ChatMessage userMsg) async {
+    // 1. 严格校验：只能撤回最后一条用户提问
+    if (!ws.isLastUserMessage(userMsg.id)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('只能撤回最后一条发送的消息')),
+        );
+      }
+      return;
+    }
+
+    // 2. 检查本次回答是否有代码/文件变动
+    final asstMsg = ws.getAssistantMessageForUser(userMsg.id);
+    final filesRaw = asstMsg?.extra?['files_changed'] ??
+        asstMsg?.extra?['trace_summary']?['files_changed'];
+    final filesChanged = (filesRaw as List?)
+        ?.map((e) => Map<String, dynamic>.from(e as Map))
+        .toList() ?? [];
+
+    // 3. 如果有代码变动，弹窗询问用户是否需要回退代码
+    bool shouldRevertCode = false;
+    if (filesChanged.isNotEmpty) {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) {
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.history_rounded, color: Colors.amber),
+                SizedBox(width: 8),
+                Text('撤回提问与代码回退'),
+              ],
+            ),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '本次提问 AI 已经修改了 ${filesChanged.length} 个文件：',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 180),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: filesChanged.map((f) {
+                          final path = f['path'] as String? ?? '';
+                          final name = f['name'] as String? ??
+                              (path.isNotEmpty ? path.split(RegExp(r'[/\\]')).last : 'file');
+                          final adds = (f['additions'] as num?)?.toInt() ?? 0;
+                          final dels = (f['deletions'] as num?)?.toInt() ?? 0;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.code_rounded, size: 15, color: Colors.blueAccent),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    style: const TextStyle(fontSize: 12.5),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (adds > 0 || dels > 0)
+                                  Text(
+                                    '+$adds -$dels',
+                                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('是否需要同时回退这些代码更改？', style: TextStyle(fontSize: 13)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'cancel'),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'keep_code'),
+                child: const Text('仅撤回消息(保留代码)'),
+              ),
+              FilledButton.tonal(
+                onPressed: () => Navigator.pop(ctx, 'revert_code'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.redAccent.withValues(alpha: 0.15),
+                  foregroundColor: Colors.redAccent,
+                ),
+                child: const Text('回退代码并撤回'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (action == null || action == 'cancel') return;
+      if (action == 'revert_code') {
+        shouldRevertCode = true;
+      }
+    }
+
+    // 4. 执行代码回退（如果需要）
+    if (shouldRevertCode && filesChanged.isNotEmpty) {
+      final pathsToRevert = filesChanged
+          .map((f) => f['path'] as String?)
+          .whereType<String>()
+          .toList();
+      final results = await ws.revertFiles(pathsToRevert);
+      final successCount = results.where((r) => r['success'] == true).length;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已成功回退 $successCount 个文件的代码更改'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+
+    // 5. 如果当前正在生成，打断生成
+    if (ws.isGenerating) {
+      ws.cancelCurrentGeneration();
+    }
+
+    // 6. 从会话中移除本轮消息（用户消息与 AI 回复）
+    final turnIds = ws.getTurnMessageIds(userMsg.id);
+    ws.removeMessages(turnIds);
+
+    // 7. 将撤回的文字填入输入框，并将光标移动到末尾，聚焦输入框
+    setState(() {
+      _input.text = userMsg.content;
+      _input.selection = TextSelection.collapsed(
+        offset: userMsg.content.length,
+      );
+    });
+    _focusNode.requestFocus();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已撤回，文本已放回输入框'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleRewindToHere(WsService ws, ChatMessage userMsg) async {
+    // 1. 收集从本条消息开始（含）往后的所有消息
+    final messagesToPrune = ws.getMessagesFromUserOnwards(userMsg.id);
+    if (messagesToPrune.isEmpty) return;
+
+    // 计算包含的用户提问回合数
+    final turnsCount = messagesToPrune
+        .where((m) =>
+            m.sender == MessageSender.me &&
+            !m.content.startsWith('[附件] ') &&
+            !m.content.startsWith('[图片] '))
+        .length;
+
+    // 2. 收集此节点之后所有涉及的文件变动
+    final filesChanged = ws.getFilesChangedFromUserOnwards(userMsg.id);
+
+    // 3. 弹窗提示用户确认回滚（时间旅行）
+    final promptSnippet = userMsg.content.trim().split('\n').first;
+    final shortPrompt = promptSnippet.length > 35
+        ? '${promptSnippet.substring(0, 32)}...'
+        : promptSnippet;
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.history_rounded, color: Color(0xFFE5C07B)),
+              SizedBox(width: 8),
+              Text('回退至此检查点 (Rewind)'),
+            ],
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                RichText(
+                  text: TextSpan(
+                    style: TextStyle(
+                      color: Theme.of(ctx).colorScheme.onSurface,
+                      fontSize: 13.5,
+                      height: 1.4,
+                    ),
+                    children: [
+                      const TextSpan(text: '确定要将工作区与对话回退至：\n'),
+                      TextSpan(
+                        text: '“$shortPrompt”\n\n',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF58A6FF),
+                        ),
+                      ),
+                      TextSpan(
+                        text: '• 将修剪此节点之后的 $turnsCount 轮对话记录与 AI 回复\n'
+                            '• 对话文本将被填回输入框，方便您调整思路后重新提问',
+                        style: const TextStyle(fontSize: 12.5),
+                      ),
+                    ],
+                  ),
+                ),
+                if (filesChanged.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    '此期间共有 ${filesChanged.length} 个被修改的文件：',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 160),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.08),
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: filesChanged.map((f) {
+                          final path = f['path'] as String? ?? '';
+                          final name = f['name'] as String? ??
+                              (path.isNotEmpty
+                                  ? path.split(RegExp(r'[/\\]')).last
+                                  : 'file');
+                          final adds = (f['additions'] as num?)?.toInt() ?? 0;
+                          final dels = (f['deletions'] as num?)?.toInt() ?? 0;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.code_rounded,
+                                  size: 15,
+                                  color: Color(0xFFE5C07B),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    style: const TextStyle(fontSize: 12.5),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (adds > 0 || dels > 0)
+                                  Text(
+                                    '+$adds -$dels',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                const Text(
+                  '是否需要同时回退这些文件的代码更改？',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'keep_code'),
+              child: const Text('仅修剪对话记录(保留代码)'),
+            ),
+            FilledButton.tonal(
+              onPressed: () => Navigator.pop(ctx, 'revert_code'),
+              style: FilledButton.styleFrom(
+                backgroundColor:
+                    const Color(0xFFE5C07B).withValues(alpha: 0.2),
+                foregroundColor: const Color(0xFFE5C07B),
+              ),
+              child: Text(
+                filesChanged.isNotEmpty ? '回退代码并回滚至此' : '确认回滚至此',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (action == null || action == 'cancel') return;
+    final shouldRevertCode = (action == 'revert_code');
+
+    // 4. 执行代码回退
+    if (shouldRevertCode && filesChanged.isNotEmpty) {
+      final pathsToRevert = filesChanged
+          .map((f) => f['path'] as String?)
+          .whereType<String>()
+          .toList();
+      final results = await ws.revertFiles(pathsToRevert);
+      final successCount = results.where((r) => r['success'] == true).length;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已回退 $successCount 个文件的代码更改至检查点状态'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+
+    // 5. 如果当前正在生成，打断生成
+    if (ws.isGenerating) {
+      ws.cancelCurrentGeneration();
+    }
+
+    // 6. 原子修剪历史：移除本消息及之后的所有消息
+    final idsToRemove = messagesToPrune.map((m) => m.id).toSet();
+    ws.removeMessages(idsToRemove);
+
+    // 7. 将该节点的提问内容填入输入框，聚焦供用户重试/分支探索
+    setState(() {
+      _input.text = userMsg.content;
+      _input.selection = TextSelection.collapsed(
+        offset: userMsg.content.length,
+      );
+    });
+    _focusNode.requestFocus();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已成功回滚至所选节点，修剪了 $turnsCount 轮历史记录'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   Future<void> _onAttach(WsService ws) async {
     if (_isUploadingAttachment) return;
 
@@ -534,6 +912,12 @@ class _ChatScreenState extends State<ChatScreen> {
             colors: colors,
             onDeleteMessage: (msgId) {
               unawaited(_confirmDeleteMessages(ws, {msgId}));
+            },
+            onRecallMessage: (msg) {
+              unawaited(_handleRecallMessage(ws, msg));
+            },
+            onRewindToHere: (msg) {
+              unawaited(_handleRewindToHere(ws, msg));
             },
             enableAiVoiceOutput: settings.enableAiVoiceOutput,
             ttsReadyMessageIds: _ttsReadyMessageIds,
@@ -666,12 +1050,18 @@ class _ChatScreenState extends State<ChatScreen> {
               colors: colors,
               activePersonaId: ws.activePersonaId,
               onSend: () => _send(ws),
+              onStop: () => ws.cancelCurrentGeneration(),
+              onRecallLastMessage: () {
+                final lastUser = ws.lastUserMessage;
+                if (lastUser != null) {
+                  unawaited(_handleRecallMessage(ws, lastUser));
+                }
+              },
               onAttach: () {
                 _onAttach(ws);
               },
               enabled:
                   ws.status == WsStatus.connected &&
-                  !ws.isGenerating &&
                   !_isUploadingAttachment,
               isGenerating: ws.isGenerating,
             ),

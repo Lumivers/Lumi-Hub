@@ -6,9 +6,11 @@ class _InputBar extends StatefulWidget {
   final LumiColors colors;
   final String activePersonaId;
   final VoidCallback onSend;
+  final VoidCallback? onStop;
   final VoidCallback onAttach;
   final bool enabled;
   final bool isGenerating;
+  final VoidCallback? onRecallLastMessage;
 
   const _InputBar({
     required this.controller,
@@ -16,9 +18,11 @@ class _InputBar extends StatefulWidget {
     required this.colors,
     required this.activePersonaId,
     required this.onSend,
+    this.onStop,
     required this.onAttach,
     required this.enabled,
     required this.isGenerating,
+    this.onRecallLastMessage,
   });
 
   @override
@@ -26,11 +30,20 @@ class _InputBar extends StatefulWidget {
 }
 
 class _InputBarState extends State<_InputBar> {
-  /// Enter 发送，Shift+Enter 换行
+  /// Enter 发送，Shift+Enter 换行，空输入框按向上键快速撤回上一次消息
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
+
+    // 空输入框按向上键 → 快速撤回并重新编辑上一次发送的消息
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
+        widget.controller.text.isEmpty &&
+        widget.onRecallLastMessage != null) {
+      widget.onRecallLastMessage!();
+      return KeyEventResult.handled;
+    }
+
     final isEnter =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
@@ -126,19 +139,17 @@ class _InputBarState extends State<_InputBar> {
           ),
           SizedBox(width: isCompact ? 2 : 4),
           IconButton(
-            // 生成中禁用发送，避免同一轮响应尚未结束时重复提交。
-            onPressed: widget.enabled && !widget.isGenerating
-                ? widget.onSend
-                : null,
+            tooltip: widget.isGenerating ? '打断生成' : '发送消息',
+            onPressed: widget.isGenerating
+                ? widget.onStop
+                : (widget.enabled ? widget.onSend : null),
             icon: widget.isGenerating
-                ? SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        widget.colors.subtext,
-                      ),
+                ? Container(
+                    width: 13,
+                    height: 13,
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      borderRadius: BorderRadius.circular(2.5),
                     ),
                   )
                 : Icon(
@@ -148,9 +159,11 @@ class _InputBarState extends State<_InputBar> {
                         : widget.colors.subtext,
                   ),
             style: IconButton.styleFrom(
-              backgroundColor: widget.enabled
-                  ? widget.colors.accent.withValues(alpha: 0.15)
-                  : Colors.transparent,
+              backgroundColor: widget.isGenerating
+                  ? Colors.redAccent.withValues(alpha: 0.16)
+                  : (widget.enabled
+                      ? widget.colors.accent.withValues(alpha: 0.15)
+                      : Colors.transparent),
               shape: const CircleBorder(),
               minimumSize: Size(isCompact ? 48 : 40, isCompact ? 48 : 40),
             ),

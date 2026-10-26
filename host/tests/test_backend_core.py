@@ -223,6 +223,62 @@ class TestLLMProviderAndPresets(unittest.IsolatedAsyncioTestCase):
         p_ollama = create_provider(provider_type="ollama", base_url="http://localhost:11434/v1", model="qwen2.5:latest")
         self.assertIsInstance(p_ollama, OllamaProvider)
 
+    def test_revert_file_backup(self):
+        from host.native_tools import write_file, revert_file
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = os.path.join(tmpdir, "test.txt")
+            with open(test_file, "w") as f:
+                f.write("original content")
+            write_file(test_file, "modified content")
+            with open(test_file, "r") as f:
+                self.assertEqual(f.read(), "modified content")
+            ok, msg = revert_file(test_file, workspace_dir=tmpdir)
+            self.assertTrue(ok)
+            with open(test_file, "r") as f:
+                self.assertEqual(f.read(), "original content")
+
+    def test_message_extra_and_trace_persistence(self):
+        import tempfile
+        from host.database.manager import DatabaseManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = DatabaseManager(tmpdir)
+            user = db.create_user("testuser", "testpass")
+            user_id = user["id"]
+            trace_data = {
+                "traces": [
+                    {
+                        "step_id": 1,
+                        "tool_name": "run_command",
+                        "tool_args": {"CommandLine": "git status"},
+                        "duration_ms": 120,
+                        "status": "success",
+                        "output_summary": "On branch main",
+                    }
+                ],
+                "trace_summary": {"step_count": 1, "total_tool_duration_ms": 120},
+                "files_changed": [{"path": "/workspace/main.dart", "additions": 5, "deletions": 2}],
+            }
+            # 保存带有 trace 的消息
+            saved = db.save_message(
+                user_id=user_id,
+                role="assistant",
+                content="这是分析结果",
+                client_msg_id="turn1_ai",
+                extra=trace_data,
+            )
+            self.assertIsNotNone(saved.get("extra"))
+            self.assertEqual(len(saved["extra"]["traces"]), 1)
+            self.assertEqual(saved["extra"]["traces"][0]["tool_name"], "run_command")
+
+            # 读取历史消息，验证 extra 完整还原
+            history = db.get_messages(user_id=user_id)
+            self.assertEqual(len(history), 1)
+            msg = history[0]
+            self.assertIsNotNone(msg.get("extra"))
+            self.assertEqual(msg["extra"]["traces"][0]["tool_name"], "run_command")
+            self.assertEqual(msg["extra"]["files_changed"][0]["path"], "/workspace/main.dart")
+
 
 if __name__ == "__main__":
     unittest.main()
