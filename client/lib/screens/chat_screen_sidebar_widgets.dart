@@ -30,6 +30,114 @@ class _TopBar extends StatelessWidget {
     this.isLive2dOpen = false,
   });
 
+  void _showModelMenu(BuildContext buttonContext, BuildContext context) async {
+    final box = buttonContext.findRenderObject() as RenderBox;
+    final pos = box.localToGlobal(Offset(0, box.size.height + 6));
+    final models = ws.configuredModels;
+    final activeId = ws.activeModelId;
+
+    final items = <PopupMenuEntry<String>>[];
+
+    if (models.isEmpty) {
+      items.add(
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Text(
+            '当前模型: ${ws.activeModelName}',
+            style: TextStyle(
+              fontSize: 12,
+              color: colors.subtext,
+            ),
+          ),
+        ),
+      );
+    } else {
+      for (final m in models) {
+        final id = m['id'] as String? ?? '';
+        final name = (m['name'] as String?) ?? (m['model'] as String?) ?? '未命名';
+        final modelId = (m['model'] as String?) ?? '';
+        final isCur = id == activeId;
+
+        items.add(
+          PopupMenuItem<String>(
+            value: id,
+            child: Row(
+              children: [
+                Icon(
+                  isCur ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                  size: 16,
+                  color: isCur ? colors.accent : colors.subtext,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isCur ? FontWeight.w600 : FontWeight.normal,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (modelId.isNotEmpty && modelId != name)
+                        Text(
+                          modelId,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: colors.subtext,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+
+    items.add(const PopupMenuDivider());
+    items.add(
+      const PopupMenuItem<String>(
+        value: '__manage__',
+        child: Row(
+          children: [
+            Icon(Icons.tune_rounded, size: 16),
+            SizedBox(width: 8),
+            Text('管理模型配置...', style: TextStyle(fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx + 220, pos.dy + 300),
+      color: colors.inputBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colors.divider),
+      ),
+      items: items,
+    );
+
+    if (selected == '__manage__') {
+      if (context.mounted) {
+        SettingsHubDialog.show(context, ws: ws, colors: colors, initialTab: 1);
+      }
+    } else if (selected != null && selected.isNotEmpty) {
+      await ws.switchModel(selected);
+    }
+  }
+
   void _showPersonaMenu(BuildContext buttonContext, BuildContext context) async {
     final box = buttonContext.findRenderObject() as RenderBox;
     final pos = box.localToGlobal(Offset(0, box.size.height + 6));
@@ -311,7 +419,54 @@ class _TopBar extends StatelessWidget {
 
             const Spacer(),
 
-            // ── 人格切换胶囊按钮 (✨ 人格名 ▾) ──
+            // ── 模型切换胶囊按钮 (模型名 ▾) ──
+            Builder(
+              builder: (btnCtx) => InkWell(
+                borderRadius: BorderRadius.circular(16),
+                hoverColor: colors.accent.withValues(alpha: 0.08),
+                onTap: () => _showModelMenu(btnCtx, context),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: colors.inputBg,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: colors.divider.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.smart_toy_outlined, size: 14, color: colors.accent),
+                      const SizedBox(width: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 130),
+                        child: Text(
+                          ws.activeModelName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                      Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 15,
+                        color: colors.subtext,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            // ── 人格切换胶囊按钮 (人格名 ▾) ──
             Builder(
               builder: (btnCtx) => InkWell(
                 borderRadius: BorderRadius.circular(16),
@@ -329,7 +484,7 @@ class _TopBar extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.auto_awesome, size: 13, color: colors.accent),
+                      Icon(Icons.person_outline, size: 14, color: colors.accent),
                       const SizedBox(width: 6),
                       Text(
                         activePersonaId.isNotEmpty ? activePersonaId : '默认助手',

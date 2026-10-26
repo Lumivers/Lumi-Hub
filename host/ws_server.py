@@ -23,6 +23,9 @@ class LumiWSServer:
         self.port = port
         self.clients: Dict[str, WebSocketServerProtocol] = {}  # session_id -> ws
         self._connected_sessions: Set[str] = set()
+        # 多端会话管理：支持同一个用户在手机、电脑等多端同时在线与消息同步
+        self._user_sessions: Dict[int, Set[str]] = {}  # user_id -> {ws_session_id, ...}
+        self._ws_to_user: Dict[str, int] = {}  # ws_session_id -> user_id
         self.server: Optional[websockets.WebSocketServer] = None
         self._message_handler: Optional[Callable[[dict, str], Awaitable[None]]] = None
         self._disconnect_handler: Optional[Callable[[str], Awaitable[None]]] = None
@@ -165,6 +168,49 @@ class LumiWSServer:
         for sid in disconnected:
             self.clients.pop(sid, None)
 
+    def register_user(self, session_id: str, user_id: int):
+        """将 WebSocket 连接与用户 ID 绑定，用于多端广播同频。"""
+        self._ws_to_user[session_id] = user_id
+        if user_id not in self._user_sessions:
+            self._user_sessions[user_id] = set()
+        self._user_sessions[user_id].add(session_id)
+        logger.info(f"[Lumi-Hub WS] 绑定用户 {user_id} -> ws_session={session_id} (该用户当前在线终端数: {len(self._user_sessions[user_id])})")
+
+    def unregister_user(self, session_id: str):
+        """解绑 WebSocket 连接。"""
+        user_id = self._ws_to_user.pop(session_id, None)
+        if user_id is not None and user_id in self._user_sessions:
+            self._user_sessions[user_id].discard(session_id)
+            if not self._user_sessions[user_id]:
+                self._user_sessions.pop(user_id, None)
+            logger.debug(f"[Lumi-Hub WS] 解绑用户 {user_id} <- ws_session={session_id}")
+
+    async def broadcast_to_user(self, user_id: int, message: dict, exclude_session_id: Optional[str] = None):
+        """向指定用户的所有已连接端广播消息（支持排除发送端，避免本地回声）。"""
+        session_ids = list(self._user_sessions.get(user_id, set()))
+        if not session_ids:
+            return
+
+        raw_json = json.dumps(message, ensure_ascii=False)
+        disconnected = []
+
+        for sid in session_ids:
+            if exclude_session_id and sid == exclude_session_id:
+                continue
+            ws = self.clients.get(sid)
+            if ws:
+                try:
+                    await ws.send(raw_json)
+                except Exception as e:
+                    logger.warning(f"[Lumi-Hub WS] 广播消息到客户端失败 (sid={sid}): {e}")
+                    disconnected.append(sid)
+            else:
+                disconnected.append(sid)
+
+        for sid in disconnected:
+            self.unregister_user(sid)
+            self.clients.pop(sid, None)
+
     # ---------- 内部方法 ----------
 
     async def _handle_connection(self, ws: WebSocketServerProtocol):
@@ -189,6 +235,7 @@ class LumiWSServer:
         except Exception as e:
             logger.error(f"[Lumi-Hub] 连接异常: {client_info} - {e}")
         finally:
+            self.unregister_user(session_id)
             self.clients.pop(session_id, None)
             self._connected_sessions.discard(session_id)
             self._session_last_seen.pop(session_id, None)

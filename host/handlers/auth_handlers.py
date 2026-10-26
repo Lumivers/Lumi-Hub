@@ -43,6 +43,7 @@ class AuthHandlersMixin:
             )
         else:
             self.active_sessions[ws_session_id] = result["id"]
+            self.ws_server.register_user(ws_session_id, result["id"])
             await self.ws_server.send_to_client(
                 ws_session_id,
                 {
@@ -94,6 +95,7 @@ class AuthHandlersMixin:
             )
         else:
             self.active_sessions[ws_session_id] = result["id"]
+            self.ws_server.register_user(ws_session_id, result["id"])
             await self.ws_server.send_to_client(
                 ws_session_id,
                 {
@@ -124,6 +126,7 @@ class AuthHandlersMixin:
             user = self.db.get_or_create_default_user()
 
         self.active_sessions[ws_session_id] = user["id"]
+        self.ws_server.register_user(ws_session_id, user["id"])
         actual_token = user.get("token") or token
         await self.ws_server.send_to_client(
             ws_session_id,

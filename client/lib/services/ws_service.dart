@@ -141,6 +141,15 @@ class WsService extends ChangeNotifier {
   List<String> _recentWorkspaces = [];
   List<String> get recentWorkspaces => List.unmodifiable(_recentWorkspaces);
 
+  // ── 模型配置与快速切换 ──
+  String _activeModelId = 'default';
+  String _activeModelName = '';
+  List<Map<String, dynamic>> _configuredModels = [];
+
+  String get activeModelId => _activeModelId;
+  String get activeModelName => _activeModelName.isNotEmpty ? _activeModelName : '默认模型';
+  List<Map<String, dynamic>> get configuredModels => List.unmodifiable(_configuredModels);
+
   // 约定 AI 回复 id 与请求 message_id 的映射规则。
   String _assistantMsgId(String msgId) => '${msgId}_ai';
 
@@ -405,6 +414,9 @@ class WsService extends ChangeNotifier {
         case 'CHAT_RESPONSE':
           _handleChatResponse(data);
           break;
+        case 'CHAT_MESSAGE_SYNC':
+          _handleChatMessageSync(data);
+          break;
         case 'CHAT_STREAM_CHUNK':
           _handleChatStreamChunk(data);
           break;
@@ -494,8 +506,72 @@ class WsService extends ChangeNotifier {
     }
   }
 
+  void _handleChatMessageSync(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final msgId = (payload['message_id'] as String?) ?? (data['message_id'] as String?) ?? '';
+    if (msgId.isEmpty) return;
+
+    // 回声抑制 (Echo Suppression): 若本地已包含该消息（例如自身发送并乐观渲染），直接忽略
+    if (_messages.any((m) => m.id == msgId)) {
+      return;
+    }
+
+    final targetSessionId = payload['session_id'] as String?;
+    if (targetSessionId != null &&
+        _activeSessionId != null &&
+        targetSessionId != _activeSessionId) {
+      return;
+    }
+
+    final content = payload['content'] as String? ?? '';
+    final role = payload['role'] as String? ?? 'user';
+    final now = DateTime.now();
+
+    // 渲染对端设备发送的用户消息
+    if (role == 'user' && content.isNotEmpty) {
+      _messages.add(
+        ChatMessage(
+          id: msgId,
+          content: content,
+          sender: MessageSender.me,
+          time: now,
+        ),
+      );
+
+      // 为接收端挂上 AI 正在输入的 typing 占位，并开启生成状态
+      final typingId = '${msgId}_typing';
+      if (!_messages.any((m) => m.id == typingId)) {
+        _messages.add(
+          ChatMessage(
+            id: typingId,
+            content: '',
+            sender: MessageSender.ai,
+            time: now,
+            isTyping: true,
+            extra: {'traces': _traceCache.putIfAbsent(msgId, () => <Map<String, dynamic>>[])},
+          ),
+        );
+      }
+      _isGenerating = true;
+      _generationUnlockTimer?.cancel();
+      _generationUnlockTimer = Timer(const Duration(seconds: 120), () {
+        _isGenerating = false;
+        notifyListeners();
+      });
+
+      notifyListeners();
+    }
+  }
+
   void _handleChatResponse(Map<String, dynamic> data) {
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final targetSessionId = payload['session_id'] as String?;
+    if (targetSessionId != null &&
+        _activeSessionId != null &&
+        targetSessionId != _activeSessionId) {
+      return;
+    }
+
     final content = payload['content'] as String? ?? '';
     if (content.isEmpty) return;
 
@@ -550,6 +626,13 @@ class WsService extends ChangeNotifier {
 
   void _handleChatStreamChunk(Map<String, dynamic> data) {
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
+    final targetSessionId = payload['session_id'] as String?;
+    if (targetSessionId != null &&
+        _activeSessionId != null &&
+        targetSessionId != _activeSessionId) {
+      return;
+    }
+
     final chunk = payload['chunk'] as String? ?? '';
     final finished = payload['finished'] == true;
     final msgId = data['message_id'] as String? ?? _genId();
@@ -668,6 +751,7 @@ class WsService extends ChangeNotifier {
       unawaited(loadRecentWorkspaces().then((_) {
         requestPersonaList();
         requestSessionList();
+        fetchLlmConfig();
       }));
       notifyListeners();
     } else {
@@ -1366,6 +1450,62 @@ class WsService extends ChangeNotifier {
       'skill_name': skillName.trim(),
     });
     return resp?['payload']?['status'] == 'success';
+  }
+
+  // ── 模型配置管理与快速切换 API ───────────────────────────────────────
+
+  /// 从 Host 获取模型列表与当前激活模型
+  Future<void> fetchLlmConfig() async {
+    final resp = await sendRequest('LLM_CONFIG_GET', {});
+    if (resp != null) {
+      final payload = resp['payload'] as Map<String, dynamic>? ?? {};
+      _activeModelId = (payload['active_model_id'] as String?) ?? 'default';
+      final list = payload['models'] as List<dynamic>? ?? [];
+      _configuredModels = list.map((m) => Map<String, dynamic>.from(m as Map)).toList();
+
+      final active = _configuredModels.firstWhere(
+        (m) => m['id'] == _activeModelId,
+        orElse: () => _configuredModels.isNotEmpty ? _configuredModels.first : <String, dynamic>{},
+      );
+      _activeModelName = (active['name'] as String?) ?? (active['model'] as String?) ?? '';
+      notifyListeners();
+    }
+  }
+
+  /// 快速切换当前生效模型
+  Future<bool> switchModel(String modelId) async {
+    final resp = await sendRequest('LLM_SWITCH_MODEL', {'model_id': modelId});
+    if (resp != null && resp['payload']?['status'] == 'success') {
+      _activeModelId = modelId;
+      final payload = resp['payload'] as Map<String, dynamic>? ?? {};
+      _activeModelName = (payload['name'] as String?) ?? (payload['model'] as String?) ?? _activeModelName;
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  /// 保存或添加模型 Profile
+  Future<bool> saveModelProfile(Map<String, dynamic> modelData, {bool setActive = false}) async {
+    final resp = await sendRequest('LLM_MODEL_SAVE', {
+      'model': modelData,
+      'set_active': setActive,
+    });
+    if (resp != null && resp['payload']?['status'] == 'success') {
+      await fetchLlmConfig();
+      return true;
+    }
+    return false;
+  }
+
+  /// 删除模型 Profile
+  Future<bool> deleteModelProfile(String modelId) async {
+    final resp = await sendRequest('LLM_MODEL_DELETE', {'model_id': modelId});
+    if (resp != null && resp['payload']?['status'] == 'success') {
+      await fetchLlmConfig();
+      return true;
+    }
+    return false;
   }
 
   void _setStatus(WsStatus s) {

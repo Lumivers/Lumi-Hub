@@ -4,6 +4,7 @@ Lumi-Hub 2.0 — 核心 Agent 运行时 (ReAct Loop)
 生命周期：收到用户消息 → run() → 流式返回 → 结束。不常驻，每次对话创建一个实例。
 """
 import asyncio
+import os
 import json
 import uuid
 import time
@@ -15,6 +16,119 @@ logger = logging.getLogger("lumi")
 
 # ReAct 循环最大迭代次数，防止死循环
 MAX_ITERATIONS = 20
+
+# 历史对话 Token 阈值，超过则触发滑动窗口摘要提炼
+HISTORY_TOKEN_THRESHOLD = 3000
+# 滑动窗口保留的最近完整消息数
+KEEP_RECENT_MESSAGES = 6
+
+
+def estimate_tokens(text: str) -> int:
+    """估算文本 Token 数量（适配中英混合场景）。"""
+    if not text:
+        return 0
+    cjk_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    other_count = len(text) - cjk_count
+    return int(cjk_count * 0.8 + other_count / 3.5) + 1
+
+
+def estimate_messages_tokens(messages: list[dict]) -> int:
+    """估算消息列表总 Token 开销。"""
+    total = 0
+    for m in messages:
+        content = m.get("content") or ""
+        total += estimate_tokens(str(content)) + 4
+    return total
+
+
+def get_workspace_summary(workspace_dir: str, max_depth: int = 2, max_entries: int = 60) -> dict:
+    """提取工作区概览：主要语言栈与顶层目录结构骨架。"""
+    if not workspace_dir or not os.path.exists(workspace_dir) or not os.path.isdir(workspace_dir):
+        return {}
+
+    # 1. 识别主要技术栈
+    tech_stacks = []
+
+    def check_indicators(check_dir: str):
+        indicators = set()
+        try:
+            for item in os.listdir(check_dir):
+                indicators.add(item)
+        except Exception:
+            pass
+        return indicators
+
+    root_items = check_indicators(workspace_dir)
+    # 也检查常见一级子目录（例如 client/ 和 host/）
+    sub_items = set()
+    for d in ("client", "host", "src", "app", "frontend", "backend"):
+        sub_p = os.path.join(workspace_dir, d)
+        if os.path.isdir(sub_p):
+            sub_items.update(check_indicators(sub_p))
+
+    all_indicators = root_items | sub_items
+
+    if "pubspec.yaml" in all_indicators:
+        tech_stacks.append("Flutter / Dart")
+    if any(k in all_indicators for k in ("requirements.txt", "pyproject.toml", "Pipfile", "setup.py")):
+        tech_stacks.append("Python")
+    if "package.json" in all_indicators:
+        tech_stacks.append("Node.js / Web (JavaScript/TypeScript)")
+    if "Cargo.toml" in all_indicators:
+        tech_stacks.append("Rust")
+    if "go.mod" in all_indicators:
+        tech_stacks.append("Go")
+    if any(k in all_indicators for k in ("CMakeLists.txt", "Makefile")):
+        tech_stacks.append("C / C++")
+    if any(k in all_indicators for k in ("pom.xml", "build.gradle", "build.gradle.kts")):
+        tech_stacks.append("Java / Kotlin")
+    if any(f.endswith((".csproj", ".sln")) for f in all_indicators):
+        tech_stacks.append("C# / .NET")
+
+    # 2. 生成过滤后的目录树骨架
+    ignored = {
+        ".git", ".idea", ".vscode", "build", ".dart_tool", "node_modules",
+        "__pycache__", ".pytest_cache", ".venv", "venv", "env", ".Lumi_cache",
+        "dist", "target", "bin", "obj", ".gradle"
+    }
+
+    tree_lines = []
+    entry_count = 0
+
+    def walk_tree(current_dir: str, depth: int, prefix: str):
+        nonlocal entry_count
+        if depth > max_depth or entry_count >= max_entries:
+            return
+        try:
+            entries = sorted(os.listdir(current_dir))
+        except Exception:
+            return
+
+        visible = [e for e in entries if e not in ignored and not e.startswith(".")]
+        for i, entry in enumerate(visible):
+            if entry_count >= max_entries:
+                tree_lines.append(f"{prefix}└── ... (其余文件已折叠)")
+                break
+            full_path = os.path.join(current_dir, entry)
+            is_last = (i == len(visible) - 1)
+            connector = "└── " if is_last else "├── "
+            new_prefix = prefix + ("    " if is_last else "│   ")
+
+            if os.path.isdir(full_path):
+                tree_lines.append(f"{prefix}{connector}{entry}/")
+                entry_count += 1
+                walk_tree(full_path, depth + 1, new_prefix)
+            else:
+                tree_lines.append(f"{prefix}{connector}{entry}")
+                entry_count += 1
+
+    walk_tree(workspace_dir, 1, "")
+
+    return {
+        "workspace_dir": workspace_dir,
+        "tech_stacks": ", ".join(tech_stacks) if tech_stacks else "通用项目 (General)",
+        "tree_skeleton": "\n".join(tree_lines) if tree_lines else "(空目录)"
+    }
 
 
 class AgentLoop:
@@ -85,6 +199,9 @@ class AgentLoop:
         5. 发送 CHAT_RESPONSE_END 解锁前端
         """
         try:
+            # 1. 长对话历史 Token 压缩与滑动窗口提炼
+            compacted_history = await self._compact_history_if_needed(self.history)
+
             # 检索与当前消息相关的记忆
             relevant_memories = []
             if self.memory_manager and self.user_id:
@@ -98,8 +215,10 @@ class AgentLoop:
             # 构建 system prompt
             system_prompt = self._build_system_prompt(relevant_memories)
 
-            # 构建 messages 数组
-            messages = self._build_messages(system_prompt, user_message, attachments)
+            # 构建 messages 数组（支持 Persona 切换平滑锚点）
+            messages = self._build_messages(
+                system_prompt, user_message, attachments, history_messages=compacted_history
+            )
 
             # 获取工具 schema
             tool_schemas = await self.tools.get_all_schemas_with_mcp()
@@ -179,6 +298,12 @@ class AgentLoop:
                                     tool_args["path"] = os.path.normpath(os.path.join(self.workspace_dir, p))
                             if tool_name == "run_command" and not tool_args.get("cwd"):
                                 tool_args["cwd"] = self.workspace_dir
+                            if tool_name in ("search_workspace", "grep_code", "find_symbol"):
+                                if not tool_args.get("workspace_dir") and not tool_args.get("path"):
+                                    if "workspace_dir" in tool_args or tool_name == "search_workspace":
+                                        tool_args["workspace_dir"] = self.workspace_dir
+                                    if "path" in tool_args or tool_name in ("grep_code", "find_symbol"):
+                                        tool_args["path"] = self.workspace_dir
 
                         # 1. 记录并通知 Step 启动
                         step = self.trace_collector.start_step(tool_name, tool_args)
@@ -256,13 +381,120 @@ class AgentLoop:
             await self._send_error(f"Agent 运行异常: {e}")
             await self._send_chat_end()
 
+    async def _send_event(self, message: dict):
+        """统一向用户的所有在线端广播事件；若无 user_id 则单播至当前连接。"""
+        if self.user_id and hasattr(self.ws_server, "broadcast_to_user"):
+            await self.ws_server.broadcast_to_user(self.user_id, message)
+        else:
+            await self.ws_server.send_to_client(self.ws_session_id, message)
+
+    async def _compact_history_if_needed(self, history: list[dict]) -> list[dict]:
+        """长对话滑动窗口与上下文自动摘要压缩 (Context Compaction):
+        当 self.history 估算 Token 超过设定阈值时，自动将早期历史提炼为结构化
+        【上下文摘要节点 (Summary Node)】，保持'历史摘要 + 最近 k 轮细粒度消息'。
+        """
+        if not history or len(history) <= KEEP_RECENT_MESSAGES:
+            return history
+
+        total_tokens = estimate_messages_tokens(history)
+        if total_tokens <= HISTORY_TOKEN_THRESHOLD:
+            return history
+
+        logger.info(
+            f"[AgentLoop] 对话历史 Token ({total_tokens}) 超过阈值 ({HISTORY_TOKEN_THRESHOLD})，触发上下文摘要压缩"
+        )
+
+        early_msgs = history[:-KEEP_RECENT_MESSAGES]
+        recent_msgs = history[-KEEP_RECENT_MESSAGES:]
+
+        summary_text = await self._summarize_early_dialogue(early_msgs)
+        if not summary_text:
+            return history
+
+        summary_node = {
+            "role": "system",
+            "content": (
+                "### 上下文历史摘要 (Context Summary Node) ###\n"
+                "以下为本会话早期对话记录的结构化摘要（包含历史讨论、关键决策与已完成操作）：\n"
+                f"{summary_text}\n"
+                "############################################"
+            ),
+        }
+
+        return [summary_node] + recent_msgs
+
+    async def _summarize_early_dialogue(self, messages: list[dict]) -> str:
+        """调用轻量 LLM 异步提炼早期对话历史为结构化摘要，带降级机制。"""
+        dialogue_lines = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = str(m.get("content", ""))
+            if len(content) > 400:
+                content = content[:200] + " ... " + content[-150:]
+            dialogue_lines.append(f"{role}: {content}")
+        dialogue_text = "\n".join(dialogue_lines)
+
+        summary_prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一个对话上下文提炼专家。请将以下早期对话记录提炼为一个结构化【历史摘要】。\n"
+                    "要求：\n"
+                    "1. 提取讨论的核心目标、用户要求、关键决定、以及已修改或操作过的文件/代码事实。\n"
+                    "2. 剔除寒暄与无意义细节，按要点列表（- 条目）呈现。\n"
+                    "3. 保持简练，控制在 300 字以内。"
+                ),
+            },
+            {"role": "user", "content": dialogue_text},
+        ]
+
+        try:
+            summary_result = ""
+            async def _do_chat():
+                nonlocal summary_result
+                async for ev in self.llm.chat_stream(messages=summary_prompt):
+                    if ev.get("type") == "text":
+                        summary_result += ev.get("content", "")
+
+            await asyncio.wait_for(_do_chat(), timeout=8.0)
+            cleaned_summary = summary_result.strip()
+            if cleaned_summary:
+                return cleaned_summary
+        except Exception as e:
+            logger.warning(f"[AgentLoop] LLM 生成上下文历史摘要失败或超时，降级为关键条目抽取: {e}")
+
+        # 降级提取：抽取非空的代表性行
+        extracted = []
+        for m in messages:
+            r = m.get("role", "user")
+            c = str(m.get("content", "")).strip().splitlines()
+            first = c[0][:100] if c else ""
+            if first:
+                extracted.append(f"- [{r}] {first}")
+        return "\n".join(extracted[:10])
+
     def _build_system_prompt(self, relevant_memories: list[dict] = None) -> str:
-        """构建 system prompt。"""
+        """构建 system prompt，动态感知工作区上下文。"""
         prompt = self.persona_system_prompt
         if self.agent_prompt:
             prompt += "\n\n" + self.agent_prompt
         if self.skill_prompt:
             prompt += "\n\n### ACTIVE_SKILL_WORKFLOW ###\n" + self.skill_prompt
+
+        # 动态感知工作区概览 (Workspace Awareness)
+        if self.workspace_dir and os.path.exists(self.workspace_dir):
+            summary = get_workspace_summary(self.workspace_dir)
+            if summary:
+                ws_text = (
+                    "\n\n### WORKSPACE_CONTEXT ###\n"
+                    f"- 工作区根目录: {summary['workspace_dir']}\n"
+                    f"- 检测技术栈: {summary['tech_stacks']}\n"
+                    f"- 项目顶层骨架:\n{summary['tree_skeleton']}\n"
+                    "- 检索提示: 请优先使用 `search_workspace` 定位文件，`grep_code` 全文搜索代码，`find_symbol` 定位类与函数定义。\n"
+                    "###########################"
+                )
+                prompt += ws_text
+
         if relevant_memories:
             mem_text = "\n[关于该用户的长期记忆与偏好]\n" + "\n".join(
                 f"- [{m['category']}] {m['content']}" for m in relevant_memories
@@ -271,19 +503,38 @@ class AgentLoop:
         return prompt
 
     def _build_messages(
-        self, system_prompt: str, user_message: str, attachments: list[dict] = None
+        self, system_prompt: str, user_message: str, attachments: list[dict] = None, history_messages: list[dict] = None
     ) -> list[dict]:
-        """构建 messages 数组。"""
+        """构建 messages 数组，支持 Persona 切换时平滑注入隔离锚点。"""
         messages = [{"role": "system", "content": system_prompt}]
 
-        # 添加历史消息
-        for msg in self.history:
+        hist = history_messages if history_messages is not None else self.history
+        current_tracked_persona = None
+
+        # 添加历史消息，并在同一会话切换 Persona 时注入虚拟系统隔离锚点
+        for msg in hist:
+            msg_persona = msg.get("persona_id")
+            if msg_persona and current_tracked_persona is not None and msg_persona != current_tracked_persona:
+                messages.append({
+                    "role": "system",
+                    "content": f"[System: User switched persona to '{msg_persona}']",
+                })
+            if msg_persona:
+                current_tracked_persona = msg_persona
+
             messages.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", ""),
             })
 
-        # 构建用户消息（含附件提示）
+        # 若历史最后的人格与本次请求活跃人格不一致，注入当前人格切换锚点
+        if current_tracked_persona and self.persona_id and current_tracked_persona != self.persona_id:
+            messages.append({
+                "role": "system",
+                "content": f"[System: User switched persona to '{self.persona_id}']",
+            })
+
+        # 构建当前用户消息（含附件提示）
         content = user_message
         if attachments:
             attachment_lines = []
@@ -302,7 +553,7 @@ class AgentLoop:
         return messages
 
     async def _stream_text(self, content: str):
-        """将 LLM 文本回复逐 chunk 通过 WebSocket 发送。"""
+        """将 LLM 文本回复逐 chunk 通过 WebSocket 广播至所有在线设备。"""
         chunk_msg = {
             "message_id": self.msg_id,
             "type": "CHAT_STREAM_CHUNK",
@@ -312,9 +563,10 @@ class AgentLoop:
             "payload": {
                 "chunk": content,
                 "finished": False,
+                "session_id": self.session_id,
             },
         }
-        await self.ws_server.send_to_client(self.ws_session_id, chunk_msg)
+        await self._send_event(chunk_msg)
 
     async def _send_tool_call_start(self, tool_name: str, arguments: dict):
         """通知客户端工具调用开始。"""
@@ -327,9 +579,10 @@ class AgentLoop:
             "payload": {
                 "tool_name": tool_name,
                 "arguments": arguments,
+                "session_id": self.session_id,
             },
         }
-        await self.ws_server.send_to_client(self.ws_session_id, msg)
+        await self._send_event(msg)
 
     async def _send_tool_call_result(self, tool_name: str, success: bool, summary: str):
         """通知客户端工具调用结果。"""
@@ -343,9 +596,10 @@ class AgentLoop:
                 "tool_name": tool_name,
                 "success": success,
                 "summary": summary,
+                "session_id": self.session_id,
             },
         }
-        await self.ws_server.send_to_client(self.ws_session_id, msg)
+        await self._send_event(msg)
 
     async def _send_trace_step_update(self, step: StepTrace):
         """通知客户端 Step Trace 状态更新。"""
@@ -357,7 +611,7 @@ class AgentLoop:
             "timestamp": int(time.time() * 1000),
             "payload": step.to_dict(),
         }
-        await self.ws_server.send_to_client(self.ws_session_id, msg)
+        await self._send_event(msg)
 
     async def _send_trace_summary(self):
         """通知客户端本次对话的完整 Trace 汇总。"""
@@ -371,7 +625,7 @@ class AgentLoop:
                 "timestamp": int(time.time() * 1000),
                 "payload": summary,
             }
-            await self.ws_server.send_to_client(self.ws_session_id, msg)
+            await self._send_event(msg)
 
     def _compact_messages(self, messages: list[dict], keep_recent_tools: int = 2) -> list[dict]:
         """Observation Compaction (过桥抽板):
@@ -408,9 +662,9 @@ class AgentLoop:
             "source": "host",
             "target": "client",
             "timestamp": int(time.time() * 1000),
-            "payload": {"status": "success"},
+            "payload": {"status": "success", "session_id": self.session_id},
         }
-        await self.ws_server.send_to_client(self.ws_session_id, msg)
+        await self._send_event(msg)
 
     async def _send_error(self, error_detail: str):
         """发送错误消息给客户端。"""
@@ -424,9 +678,10 @@ class AgentLoop:
                 "content": f"⚠️ {error_detail}",
                 "status": "error",
                 "persona": self.persona_id,
+                "session_id": self.session_id,
             },
         }
-        await self.ws_server.send_to_client(self.ws_session_id, msg)
+        await self._send_event(msg)
 
     async def wait_for_auth(
         self,

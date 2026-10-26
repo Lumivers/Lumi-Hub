@@ -2,6 +2,8 @@ import os
 import shutil
 import time
 import asyncio
+import re
+import fnmatch
 import logging
 logger = logging.getLogger("lumi")
 
@@ -277,4 +279,233 @@ async def run_command(command: str, cwd: str = None, timeout: int = 60) -> str:
         return "\n".join(output_parts)
     except Exception as e:
         return f"Error executing command: {e}"
+
+
+# ===== 工程级代码与工作区检索工具 (Workspace Awareness & Code RAG) =====
+
+IGNORED_DIRS = {
+    ".git", ".idea", ".vscode", "build", ".dart_tool", "node_modules",
+    "__pycache__", ".pytest_cache", ".venv", "venv", "env", ".Lumi_cache",
+    "dist", "target", "bin", "obj", ".gradle"
+}
+
+BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff",
+    ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar", ".mp3", ".mp4", ".wav",
+    ".ogg", ".webm", ".pyc", ".pyd", ".dll", ".so", ".dylib", ".exe",
+    ".bin", ".moc", ".moc3", ".model3.json"
+}
+
+
+def is_binary_file(path: str) -> bool:
+    """快速判断是否为二进制文件或忽略文件"""
+    _, ext = os.path.splitext(path.lower())
+    return ext in BINARY_EXTENSIONS
+
+
+def search_workspace(pattern: str, workspace_dir: str = "", max_results: int = 50) -> str:
+    """在工作区目录下递归搜索匹配特定名称或通配符模式的文件与目录。"""
+    root_dir = workspace_dir if (workspace_dir and os.path.exists(workspace_dir)) else os.getcwd()
+    if not os.path.isdir(root_dir):
+        return f"Error: '{root_dir}' is not a valid directory."
+
+    pattern_lower = pattern.lower().strip()
+    is_glob = any(ch in pattern_lower for ch in ("*", "?", "[", "]"))
+    matches = []
+
+    try:
+        for root, dirs, files in os.walk(root_dir):
+            # 过滤忽略目录，防止递归进入大型无关文件夹
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+
+            rel_root = os.path.relpath(root, root_dir)
+            if rel_root == ".":
+                rel_root = ""
+
+            for name in files:
+                rel_path = os.path.join(rel_root, name) if rel_root else name
+                matched = False
+                if is_glob:
+                    if fnmatch.fnmatch(name.lower(), pattern_lower) or fnmatch.fnmatch(rel_path.lower(), pattern_lower):
+                        matched = True
+                else:
+                    if pattern_lower in name.lower() or pattern_lower in rel_path.lower():
+                        matched = True
+
+                if matched:
+                    full_p = os.path.join(root, name)
+                    try:
+                        sz = os.path.getsize(full_p)
+                        size_str = f"{sz / 1024:.1f} KB" if sz > 1024 else f"{sz} B"
+                    except Exception:
+                        size_str = "unknown"
+                    matches.append((rel_path, "FILE", size_str))
+                    if len(matches) >= max_results:
+                        break
+            if len(matches) >= max_results:
+                break
+
+        if not matches:
+            return f"No files found matching '{pattern}' in {root_dir}"
+
+        lines = [f"Found {len(matches)} matches for '{pattern}' in {root_dir}:"]
+        for p, kind, sz in matches:
+            lines.append(f"  [{kind}] {p} ({sz})")
+        if len(matches) >= max_results:
+            lines.append(f"  ... (Reached max results limit: {max_results})")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error searching workspace: {e}"
+
+
+def grep_code(query: str, path: str = "", is_regex: bool = False, case_sensitive: bool = False, max_results: int = 50, file_extension: str = "") -> str:
+    """在指定路径或工作区内所有代码文件中快速检索文本或正则表达式匹配项。"""
+    search_root = path if (path and os.path.exists(path)) else os.getcwd()
+    if not os.path.exists(search_root):
+        return f"Error: Path '{search_root}' does not exist."
+
+    flags = 0 if case_sensitive else re.IGNORECASE
+    regex = None
+    if is_regex:
+        try:
+            regex = re.compile(query, flags)
+        except re.error as e:
+            return f"Error: Invalid regular expression '{query}': {e}"
+
+    target_ext = file_extension.lower().strip()
+    if target_ext and not target_ext.startswith("."):
+        target_ext = "." + target_ext
+
+    results = []
+    total_matched_files = 0
+
+    def search_file(file_path: str, rel_path: str):
+        nonlocal results, total_matched_files
+        if is_binary_file(file_path):
+            return
+        try:
+            if os.path.getsize(file_path) > 2 * 1024 * 1024:  # 跳过大于 2MB 的巨大文件
+                return
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                file_has_match = False
+                for line_no, line in enumerate(f, start=1):
+                    line_to_test = line if case_sensitive else line.lower()
+                    query_to_test = query if case_sensitive else query.lower()
+
+                    matched = False
+                    if regex:
+                        if regex.search(line):
+                            matched = True
+                    else:
+                        if query_to_test in line_to_test:
+                            matched = True
+
+                    if matched:
+                        if not file_has_match:
+                            file_has_match = True
+                            total_matched_files += 1
+                        cleaned = line.rstrip("\r\n")
+                        if len(cleaned) > 200:
+                            cleaned = cleaned[:100] + " ... " + cleaned[-80:]
+                        results.append(f"{rel_path}:{line_no}: {cleaned}")
+                        if len(results) >= max_results:
+                            return
+        except Exception:
+            pass
+
+    if os.path.isfile(search_root):
+        search_file(search_root, os.path.basename(search_root))
+    else:
+        for root, dirs, files in os.walk(search_root):
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+            rel_root = os.path.relpath(root, search_root)
+            if rel_root == ".":
+                rel_root = ""
+
+            for name in files:
+                if target_ext and not name.lower().endswith(target_ext):
+                    continue
+                full_path = os.path.join(root, name)
+                rel_path = os.path.join(rel_root, name) if rel_root else name
+                search_file(full_path, rel_path)
+                if len(results) >= max_results:
+                    break
+            if len(results) >= max_results:
+                break
+
+    if not results:
+        return f"No matches found for '{query}' in {search_root}"
+
+    header = f"Found {len(results)} matches across {total_matched_files} files for '{query}':"
+    if len(results) >= max_results:
+        results.append(f"... (Reached max results limit: {max_results})")
+    return header + "\n" + "\n".join(results)
+
+
+def find_symbol(symbol: str, path: str = "", max_results: int = 30) -> str:
+    """在代码库中快速定位符号（类、函数、方法、接口、结构体、枚举等）定义。"""
+    search_root = path if (path and os.path.exists(path)) else os.getcwd()
+    if not os.path.exists(search_root):
+        return f"Error: Path '{search_root}' does not exist."
+
+    escaped = re.escape(symbol.strip())
+    pattern = re.compile(
+        rf"(?:class|interface|struct|enum|mixin|trait|type|def|function|fn|func)\s+{escaped}\b"
+        rf"|^\s*(?:[\w<>\[\],\s]+\s+)?{escaped}\s*\([^\)]*\)\s*(?:\{{|;|=>)"
+        rf"|^\s*(?:const|let|var)\s+{escaped}\s*=\s*(?:function|\([^)]*\)\s*=>)",
+        re.MULTILINE
+    )
+
+    code_extensions = {
+        ".py", ".dart", ".ts", ".js", ".jsx", ".tsx",
+        ".rs", ".go", ".c", ".cpp", ".cc", ".h", ".hpp",
+        ".java", ".kt", ".cs", ".swift", ".lua", ".rb", ".php"
+    }
+
+    results = []
+    def search_file(file_path: str, rel_path: str):
+        nonlocal results
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                for line_no, line in enumerate(f, start=1):
+                    if symbol not in line:
+                        continue
+                    if pattern.search(line):
+                        cleaned = line.strip()
+                        if len(cleaned) > 160:
+                            cleaned = cleaned[:160] + "..."
+                        results.append(f"{rel_path}:{line_no}: {cleaned}")
+                        if len(results) >= max_results:
+                            return
+        except Exception:
+            pass
+
+    if os.path.isfile(search_root):
+        search_file(search_root, os.path.basename(search_root))
+    else:
+        for root, dirs, files in os.walk(search_root):
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+            rel_root = os.path.relpath(root, search_root)
+            if rel_root == ".":
+                rel_root = ""
+
+            for name in files:
+                _, ext = os.path.splitext(name.lower())
+                if ext not in code_extensions:
+                    continue
+                full_path = os.path.join(root, name)
+                rel_path = os.path.join(rel_root, name) if rel_root else name
+                search_file(full_path, rel_path)
+                if len(results) >= max_results:
+                    break
+            if len(results) >= max_results:
+                break
+
+    if not results:
+        return f"No symbol definition found for '{symbol}' in {search_root}. (Try using `grep_code` for broader text matches)"
+
+    header = f"Found {len(results)} definitions for symbol '{symbol}':"
+    if len(results) >= max_results:
+        results.append(f"... (Reached max results limit: {max_results})")
+    return header + "\n" + "\n".join(results)
 

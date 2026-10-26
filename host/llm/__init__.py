@@ -57,19 +57,9 @@ def create_provider(data_dir: str = None, provider_type: str = None, **kwargs) -
             or default
         )
 
-    if ptype == "openai":
+    if ptype == "anthropic":
         api_key = _get("api_key", "LUMI_LLM_API_KEY", "")
-        base_url = _get("base_url", "LUMI_LLM_BASE_URL")
-        default_model = _get("model", "LUMI_LLM_MODEL", "gpt-4o")
-        if not api_key:
-            logger.warning("[LLM] OpenAI API Key 未配置，LLM 调用将失败")
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url, default_model=default_model)
-        logger.info(f"[LLM] 使用 OpenAI Provider (model={default_model})")
-        return provider
-
-    elif ptype == "anthropic":
-        api_key = _get("api_key", "LUMI_LLM_API_KEY", "")
-        default_model = _get("model", "LUMI_LLM_MODEL", "claude-sonnet-4-20250514")
+        default_model = _get("model", "LUMI_LLM_MODEL", "claude-3-7-sonnet-20250219")
         if not api_key:
             logger.warning("[LLM] Anthropic API Key 未配置，LLM 调用将失败")
         provider = AnthropicProvider(api_key=api_key, default_model=default_model)
@@ -84,4 +74,12 @@ def create_provider(data_dir: str = None, provider_type: str = None, **kwargs) -
         return provider
 
     else:
-        raise ValueError(f"不支持的 LLM Provider 类型: {ptype}，可选: openai, anthropic, ollama")
+        # 所有兼容 OpenAI 格式的服务商（DeepSeek、Moonshot、智谱GLM、阿里百炼、硅基流动、火山豆包、OpenRouter、Groq、中转站等）
+        api_key = _get("api_key", "LUMI_LLM_API_KEY", "")
+        base_url = _get("base_url", "LUMI_LLM_BASE_URL")
+        default_model = _get("model", "LUMI_LLM_MODEL", "gpt-4o")
+        if not api_key and ptype != "custom":
+            logger.warning(f"[LLM] {ptype} API Key 未配置，LLM 调用将失败")
+        provider = OpenAIProvider(api_key=api_key, base_url=base_url, default_model=default_model)
+        logger.info(f"[LLM] 使用 {ptype} (OpenAI 兼容规范) Provider (model={default_model}, base_url={base_url})")
+        return provider
