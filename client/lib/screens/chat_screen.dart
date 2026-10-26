@@ -17,6 +17,7 @@ import '../services/app_settings.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/live2d_view.dart';
+import '../widgets/message_share_card_dialog.dart';
 import '../widgets/trace_timeline_widget.dart';
 import 'components/approval_dialog.dart';
 import 'extension_center_dialog.dart';
@@ -41,14 +42,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final FocusNode _focusNode = FocusNode();
   VoidCallback? _wsListener;
 
-  bool _isSelectionMode = false;
   bool _showSidebar = true;
   bool _showLive2dPanel = false;
   bool _loadingOlder = false;
   bool _pendingInitialBottom = true;
   bool _bottomJumpScheduled = false;
   int _lastMessageCount = 0;
-  final Set<String> _selectedMessageIds = {};
   StreamSubscription? _authSubscription;
   StreamSubscription<Map<String, dynamic>>? _voiceSubscription;
   String? _pendingFileName;
@@ -282,7 +281,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onScrollMaybeLoadOlder() {
-    if (_loadingOlder || _isSelectionMode || !_scroll.hasClients) return;
+    if (_loadingOlder || !_scroll.hasClients) return;
     if (_scroll.position.pixels <= 60) {
       unawaited(_loadOlderMessages());
     }
@@ -392,46 +391,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _toggleSelectionMode() {
-    setState(() {
-      _isSelectionMode = !_isSelectionMode;
-      if (!_isSelectionMode) {
-        _selectedMessageIds.clear();
-      }
-    });
-  }
-
-  void _toggleMessageSelection(String messageId) {
-    setState(() {
-      if (_selectedMessageIds.contains(messageId)) {
-        _selectedMessageIds.remove(messageId);
-        if (_selectedMessageIds.isEmpty) {
-          _isSelectionMode = false;
-        }
-      } else {
-        _selectedMessageIds.add(messageId);
-      }
-    });
-  }
-
-  void _setSelectedMessages(Set<String> messageIds) {
-    setState(() {
-      _selectedMessageIds
-        ..clear()
-        ..addAll(messageIds);
-      _isSelectionMode = _selectedMessageIds.isNotEmpty;
-    });
-  }
-
-  void _deleteSelectedMessages(WsService ws) {
-    if (_selectedMessageIds.isEmpty) return;
-    ws.removeMessages(_selectedMessageIds);
-    setState(() {
-      _isSelectionMode = false;
-      _selectedMessageIds.clear();
-    });
-  }
-
   Future<void> _confirmDeleteMessages(
     WsService ws,
     Set<String> messageIds,
@@ -458,15 +417,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (ok == true) {
       ws.removeMessages(messageIds);
-      if (!mounted) return;
-      if (_isSelectionMode) {
-        setState(() {
-          _selectedMessageIds.removeAll(messageIds);
-          if (_selectedMessageIds.isEmpty) {
-            _isSelectionMode = false;
-          }
-        });
-      }
     }
   }
 
@@ -563,10 +513,6 @@ class _ChatScreenState extends State<ChatScreen> {
             colors: colors,
             ws: ws,
             activePersonaId: ws.activePersonaId,
-            isSelectionMode: _isSelectionMode,
-            selectedCount: _selectedMessageIds.length,
-            onCancelSelection: _toggleSelectionMode,
-            onDeleteSelected: () => _deleteSelectedMessages(ws),
             onOpenSidebar: () {
               if (isCompact) {
                 Scaffold.of(scaffoldContext).openDrawer();
@@ -586,13 +532,6 @@ class _ChatScreenState extends State<ChatScreen> {
             activePersonaId: ws.activePersonaId,
             scroll: _scroll,
             colors: colors,
-            isSelectionMode: _isSelectionMode,
-            selectedMessageIds: _selectedMessageIds,
-            onToggleSelection: _toggleMessageSelection,
-            onSetSelection: _setSelectedMessages,
-            onEnterSelectionMode: () {
-              if (!_isSelectionMode) _toggleSelectionMode();
-            },
             onDeleteMessage: (msgId) {
               unawaited(_confirmDeleteMessages(ws, {msgId}));
             },

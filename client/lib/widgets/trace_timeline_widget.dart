@@ -127,7 +127,7 @@ class _TraceTimelineWidgetState extends State<TraceTimelineWidget> {
                         style: TextStyle(
                           fontSize: 10,
                           color: widget.colors.subtext,
-                          fontFamily: 'monospace',
+                          fontFamilyFallback: AppTheme.monoFonts,
                         ),
                       ),
                     ),
@@ -214,7 +214,7 @@ class _TraceTimelineWidgetState extends State<TraceTimelineWidget> {
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
-                                  fontFamily: 'monospace',
+                                  fontFamilyFallback: AppTheme.monoFonts,
                                   color: status == 'error'
                                       ? Colors.redAccent
                                       : widget.colors.onBubbleThem,
@@ -240,7 +240,7 @@ class _TraceTimelineWidgetState extends State<TraceTimelineWidget> {
                                     'exit $exitCode',
                                     style: TextStyle(
                                       fontSize: 9,
-                                      fontFamily: 'monospace',
+                                      fontFamilyFallback: AppTheme.monoFonts,
                                       color: exitCode == 0
                                           ? Colors.greenAccent
                                           : Colors.redAccent,
@@ -254,7 +254,7 @@ class _TraceTimelineWidgetState extends State<TraceTimelineWidget> {
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: widget.colors.subtext,
-                                  fontFamily: 'monospace',
+                                  fontFamilyFallback: AppTheme.monoFonts,
                                 ),
                               ),
                               const SizedBox(width: 4),
@@ -285,7 +285,7 @@ class _TraceTimelineWidgetState extends State<TraceTimelineWidget> {
                                 'Args: $toolArgs',
                                 style: TextStyle(
                                   fontSize: 10,
-                                  fontFamily: 'monospace',
+                                  fontFamilyFallback: AppTheme.monoFonts,
                                   color: widget.colors.subtext,
                                 ),
                                 maxLines: 3,
@@ -304,7 +304,7 @@ class _TraceTimelineWidgetState extends State<TraceTimelineWidget> {
                                 outputSummary,
                                 style: TextStyle(
                                   fontSize: 10,
-                                  fontFamily: 'monospace',
+                                  fontFamilyFallback: AppTheme.monoFonts,
                                   color: widget.colors.onBubbleThem.withValues(
                                     alpha: 0.8,
                                   ),

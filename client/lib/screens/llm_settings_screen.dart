@@ -5,120 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../services/ws_service.dart';
 
-/// 预设模板元数据（供添加模型时一键回填默认配置）
-class _ModelTemplate {
-  final String id;
-  final String name;
-  final String providerType; // 'openai', 'anthropic', 'ollama'
-  final String defaultBaseUrl;
-  final String defaultModel;
-  final List<String> recommendedModels;
-  final String hint;
-
-  const _ModelTemplate({
-    required this.id,
-    required this.name,
-    required this.providerType,
-    required this.defaultBaseUrl,
-    required this.defaultModel,
-    required this.recommendedModels,
-    required this.hint,
-  });
-}
-
-const List<_ModelTemplate> _kTemplates = [
-  _ModelTemplate(
-    id: 'custom',
-    name: '自定义中转站 / 反代',
-    providerType: 'openai',
-    defaultBaseUrl: '',
-    defaultModel: '',
-    recommendedModels: [],
-    hint: '兼容 OpenAI 协议的自建网关或中转分发服务',
-  ),
-  _ModelTemplate(
-    id: 'deepseek',
-    name: 'DeepSeek',
-    providerType: 'openai',
-    defaultBaseUrl: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-chat',
-    recommendedModels: ['deepseek-chat', 'deepseek-reasoner'],
-    hint: '官方 OpenAI 兼容端点',
-  ),
-  _ModelTemplate(
-    id: 'aliyun_bailian',
-    name: '阿里百炼 / 通义千问',
-    providerType: 'openai',
-    defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    defaultModel: 'qwen-plus',
-    recommendedModels: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen2.5-72b-instruct'],
-    hint: '阿里云 DashScope 兼容模式',
-  ),
-  _ModelTemplate(
-    id: 'zhipu',
-    name: '智谱 AI / GLM',
-    providerType: 'openai',
-    defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: 'glm-4-plus',
-    recommendedModels: ['glm-4-plus', 'glm-4-flash', 'glm-4-air'],
-    hint: '清华智谱大模型',
-  ),
-  _ModelTemplate(
-    id: 'moonshot',
-    name: '月之暗面 / Kimi',
-    providerType: 'openai',
-    defaultBaseUrl: 'https://api.moonshot.cn/v1',
-    defaultModel: 'moonshot-v1-8k',
-    recommendedModels: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
-    hint: '长文本长上下文理解',
-  ),
-  _ModelTemplate(
-    id: 'siliconflow',
-    name: '硅基流动',
-    providerType: 'openai',
-    defaultBaseUrl: 'https://api.siliconflow.cn/v1',
-    defaultModel: 'deepseek-ai/DeepSeek-V3',
-    recommendedModels: [
-      'deepseek-ai/DeepSeek-V3',
-      'deepseek-ai/DeepSeek-R1',
-      'Qwen/Qwen2.5-72B-Instruct',
-    ],
-    hint: '开源模型聚合加速平台',
-  ),
-  _ModelTemplate(
-    id: 'openai',
-    name: 'OpenAI (ChatGPT)',
-    providerType: 'openai',
-    defaultBaseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4o',
-    recommendedModels: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini'],
-    hint: 'OpenAI 官方端点',
-  ),
-  _ModelTemplate(
-    id: 'anthropic',
-    name: 'Anthropic (Claude)',
-    providerType: 'anthropic',
-    defaultBaseUrl: 'https://api.anthropic.com',
-    defaultModel: 'claude-3-7-sonnet-20250219',
-    recommendedModels: [
-      'claude-3-7-sonnet-20250219',
-      'claude-3-5-sonnet-20241022',
-      'claude-3-5-haiku-20241022',
-    ],
-    hint: 'Anthropic 官方端点',
-  ),
-  _ModelTemplate(
-    id: 'ollama',
-    name: 'Ollama (本地离线)',
-    providerType: 'ollama',
-    defaultBaseUrl: 'http://localhost:11434/v1',
-    defaultModel: 'qwen2.5:latest',
-    recommendedModels: ['qwen2.5:latest', 'deepseek-r1:8b', 'llama3.2:latest'],
-    hint: '本地私有服务，无需 API Key',
-  ),
-];
-
-/// AI 模型设置页面 — 支持用户自主增删管理模型，主页下拉按需展示
+/// AI 模型设置页面 — 用户自主添加与记录模型
 class LlmSettingsScreen extends StatefulWidget {
   final bool embedded;
 
@@ -133,12 +20,12 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
   bool _editing = false;
   String? _editingModelId;
 
-  // 编辑表单控制器
-  String _selectedTemplateId = 'custom';
+  // 编辑表单字段
+  String _providerType = 'openai'; // 'openai', 'anthropic', 'ollama'
   final _nameController = TextEditingController();
-  final _apiKeyController = TextEditingController();
-  final _baseUrlController = TextEditingController();
   final _modelController = TextEditingController();
+  final _baseUrlController = TextEditingController();
+  final _apiKeyController = TextEditingController();
   bool _setActiveOnSave = true;
   bool _showApiKey = false;
   bool _saving = false;
@@ -154,9 +41,9 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
   @override
   void dispose() {
     _nameController.dispose();
-    _apiKeyController.dispose();
-    _baseUrlController.dispose();
     _modelController.dispose();
+    _baseUrlController.dispose();
+    _apiKeyController.dispose();
     super.dispose();
   }
 
@@ -177,37 +64,21 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
       if (model != null) {
         _editingModelId = model['id'] as String?;
         _nameController.text = (model['name'] as String?) ?? '';
-        _baseUrlController.text = (model['base_url'] as String?) ?? '';
+        _providerType = (model['provider'] as String?) ?? 'openai';
         _modelController.text = (model['model'] as String?) ?? '';
+        _baseUrlController.text = (model['base_url'] as String?) ?? '';
         _apiKeyController.clear();
-        _selectedTemplateId = (model['provider_preset'] as String?) ?? 'custom';
         _setActiveOnSave = model['id'] == context.read<WsService>().activeModelId;
       } else {
         _editingModelId = null;
         _nameController.clear();
-        _apiKeyController.clear();
-        _baseUrlController.clear();
+        _providerType = 'openai';
         _modelController.clear();
-        _selectedTemplateId = 'deepseek';
+        _baseUrlController.clear();
+        _apiKeyController.clear();
         _setActiveOnSave = true;
-        _applyTemplate('deepseek');
       }
     });
-  }
-
-  void _applyTemplate(String templateId) {
-    final t = _kTemplates.firstWhere(
-      (item) => item.id == templateId,
-      orElse: () => _kTemplates.first,
-    );
-    if (t.id != 'custom') {
-      if (_nameController.text.trim().isEmpty ||
-          _kTemplates.any((item) => item.name == _nameController.text.trim())) {
-        _nameController.text = t.name;
-      }
-      _baseUrlController.text = t.defaultBaseUrl;
-      _modelController.text = t.defaultModel;
-    }
   }
 
   void _cancelEditor() {
@@ -225,14 +96,8 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
     });
 
     final ws = context.read<WsService>();
-    final t = _kTemplates.firstWhere(
-      (item) => item.id == _selectedTemplateId,
-      orElse: () => _kTemplates.first,
-    );
-
     final config = <String, dynamic>{
-      'provider': t.providerType,
-      'provider_preset': t.id,
+      'provider': _providerType,
       'base_url': _baseUrlController.text.trim(),
       'model': _modelController.text.trim(),
     };
@@ -256,7 +121,7 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
         _testResult = {
           'status': 'error',
           'latency_ms': 0,
-          'message': '测试请求超时，未能从 Host 获得连通响应',
+          'message': '测试请求超时，未能从端点获得响应',
         };
       }
     });
@@ -267,22 +132,18 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
     final modelName = _modelController.text.trim();
     if (name.isEmpty || modelName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请填写模型名称和模型标识 (Model ID)')),
+        const SnackBar(content: Text('请填写模型显示名称和模型标识符')),
       );
       return;
     }
 
     setState(() => _saving = true);
     final ws = context.read<WsService>();
-    final t = _kTemplates.firstWhere(
-      (item) => item.id == _selectedTemplateId,
-      orElse: () => _kTemplates.first,
-    );
 
     final modelData = <String, dynamic>{
       'name': name,
-      'provider': t.providerType,
-      'provider_preset': t.id,
+      'provider': _providerType,
+      'provider_preset': _providerType,
       'model': modelName,
       'base_url': _baseUrlController.text.trim(),
     };
@@ -355,6 +216,17 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
     }
   }
 
+  String _providerLabel(String provider) {
+    switch (provider.toLowerCase()) {
+      case 'anthropic':
+        return 'Anthropic';
+      case 'ollama':
+        return 'Ollama 本地';
+      default:
+        return 'OpenAI 兼容';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -364,10 +236,7 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
     return _editing ? _buildEditorView(context) : _buildModelListView(context);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 视图 1: 我的模型列表（单列清爽卡片流）
-  // ─────────────────────────────────────────────────────────────────────────────
-
+  // 视图 1: 我的模型列表
   Widget _buildModelListView(BuildContext context) {
     final theme = Theme.of(context);
     final ws = context.watch<WsService>();
@@ -443,6 +312,7 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
           ...models.map((m) {
             final id = m['id'] as String? ?? '';
             final name = (m['name'] as String?) ?? (m['model'] as String?) ?? '未命名';
+            final provider = (m['provider'] as String?) ?? 'openai';
             final modelCode = (m['model'] as String?) ?? '';
             final baseUrl = (m['base_url'] as String?) ?? '';
             final keyConfigured = m['api_key_configured'] as bool? ?? false;
@@ -498,6 +368,21 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  _providerLabel(provider),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
                               if (isCur) ...[
                                 const SizedBox(width: 8),
                                 Container(
@@ -527,7 +412,8 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
                               Text(
                                 '模型: $modelCode',
                                 style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+                                  color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                               if (baseUrl.isNotEmpty)
@@ -580,18 +466,10 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 视图 2: 模型添加 / 编辑表单（单列干净表单）
-  // ─────────────────────────────────────────────────────────────────────────────
-
+  // 视图 2: 添加 / 编辑表单
   Widget _buildEditorView(BuildContext context) {
     final theme = Theme.of(context);
     final isNew = _editingModelId == null;
-
-    final currentT = _kTemplates.firstWhere(
-      (item) => item.id == _selectedTemplateId,
-      orElse: () => _kTemplates.first,
-    );
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
@@ -615,8 +493,8 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
         ),
         const SizedBox(height: 16),
 
-        // 快速预设模板下拉
-        Text('从模板快速填入（可选）', style: theme.textTheme.titleSmall),
+        // 协议规范选择
+        Text('协议类型', style: theme.textTheme.titleSmall),
         const SizedBox(height: 6),
         InputDecorator(
           decoration: const InputDecoration(
@@ -625,20 +503,25 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
-              value: _selectedTemplateId,
+              value: _providerType,
               isExpanded: true,
-              items: _kTemplates.map((t) {
-                return DropdownMenuItem<String>(
-                  value: t.id,
-                  child: Text('${t.name} — ${t.hint}'),
-                );
-              }).toList(),
+              items: const [
+                DropdownMenuItem<String>(
+                  value: 'openai',
+                  child: Text('OpenAI 兼容协议'),
+                ),
+                DropdownMenuItem<String>(
+                  value: 'anthropic',
+                  child: Text('Anthropic 原生协议'),
+                ),
+                DropdownMenuItem<String>(
+                  value: 'ollama',
+                  child: Text('Ollama 本地离线服务'),
+                ),
+              ],
               onChanged: (val) {
                 if (val != null) {
-                  setState(() {
-                    _selectedTemplateId = val;
-                    _applyTemplate(val);
-                  });
+                  setState(() => _providerType = val);
                 }
               },
             ),
@@ -647,26 +530,50 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
         const SizedBox(height: 16),
 
         // 显示名称
-        Text('模型显示名称', style: theme.textTheme.titleSmall),
+        Text('显示名称', style: theme.textTheme.titleSmall),
         const SizedBox(height: 6),
         TextField(
           controller: _nameController,
           decoration: const InputDecoration(
-            hintText: '如 DeepSeek V3、代码助手模型、自建代理',
             border: OutlineInputBorder(),
             prefixIcon: Icon(Icons.badge_outlined),
           ),
         ),
         const SizedBox(height: 16),
 
-        // API Key
+        // 模型标识符 (Model ID)
+        Text('模型标识符 (Model ID)', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _modelController,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.psychology_outlined),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // API 端点 (Base URL)
+        Text('API 端点 (Base URL)', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _baseUrlController,
+          decoration: const InputDecoration(
+            hintText: '填入服务商提供的完整 Base URL（如 https://api.xxx.com/v1）',
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.link),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // API Key (Ollama 可不填)
         Text('API Key', style: theme.textTheme.titleSmall),
         const SizedBox(height: 6),
         TextField(
           controller: _apiKeyController,
           obscureText: !_showApiKey,
           decoration: InputDecoration(
-            hintText: isNew ? '输入 API Key (sk-...)' : '留空保持使用原有已保存密钥',
+            hintText: '输入 API 密钥 (sk-...)',
             border: const OutlineInputBorder(),
             prefixIcon: const Icon(Icons.key),
             suffixIcon: IconButton(
@@ -677,73 +584,11 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
         ),
         const SizedBox(height: 16),
 
-        // Base URL
-        Text('Base URL (API 端点)', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _baseUrlController,
-          decoration: const InputDecoration(
-            hintText: '如 https://api.deepseek.com 或中转站地址',
-            border: OutlineInputBorder(),
-            prefixIcon: Icon(Icons.link),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Model ID
-        Text('模型标识符 (Model ID)', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _modelController,
-          decoration: const InputDecoration(
-            hintText: '如 deepseek-chat, gpt-4o, claude-3-7-sonnet-20250219',
-            border: OutlineInputBorder(),
-            prefixIcon: Icon(Icons.psychology_outlined),
-          ),
-        ),
-
-        // 推荐模型快捷 Chips
-        if (currentT.recommendedModels.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 6.0, right: 8.0),
-                child: Text(
-                  '推荐:',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: currentT.recommendedModels.map((m) {
-                    final isCur = _modelController.text.trim() == m;
-                    return ActionChip(
-                      label: Text(m, style: const TextStyle(fontSize: 11)),
-                      backgroundColor: isCur
-                          ? theme.colorScheme.primaryContainer
-                          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => setState(() => _modelController.text = m),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ],
-          ),
-        ],
-        const SizedBox(height: 16),
-
         // 设为当前生效模型
         CheckboxListTile(
           contentPadding: EdgeInsets.zero,
           value: _setActiveOnSave,
-          title: const Text('保存后立即设为当前使用的生效模型'),
+          title: const Text('保存后立即设为当前生效模型'),
           controlAffinity: ListTileControlAffinity.leading,
           onChanged: (val) => setState(() => _setActiveOnSave = val ?? true),
         ),
@@ -866,7 +711,7 @@ class _LlmSettingsScreenState extends State<LlmSettingsScreen> {
                 if (preview.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
-                    '模型回显预览: "$preview"',
+                    '回显预览: "$preview"',
                     style: TextStyle(
                       fontSize: 11,
                       fontStyle: FontStyle.italic,

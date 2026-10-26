@@ -3,15 +3,8 @@ part of 'chat_screen.dart';
 class _BubbleItem extends StatefulWidget {
   final ChatMessage msg;
   final LumiColors colors;
-  final bool isSelected;
-  final bool isSelectionMode;
-  final bool Function() hasGlobalSelection;
-  final VoidCallback onToggleSelection;
-  final VoidCallback onEnterSelectionMode;
+  final String activePersonaId;
   final VoidCallback onDeleteMessage;
-  final VoidCallback onActivateForTextActions;
-  final ValueChanged<Rect> onRowRectChanged;
-  final ValueChanged<Rect> onBubbleRectChanged;
   final bool enableAiVoiceOutput;
   final bool isTtsReady;
   final bool isTtsGenerating;
@@ -22,15 +15,8 @@ class _BubbleItem extends StatefulWidget {
     super.key,
     required this.msg,
     required this.colors,
-    this.isSelected = false,
-    this.isSelectionMode = false,
-    required this.hasGlobalSelection,
-    required this.onToggleSelection,
-    required this.onEnterSelectionMode,
+    required this.activePersonaId,
     required this.onDeleteMessage,
-    required this.onActivateForTextActions,
-    required this.onRowRectChanged,
-    required this.onBubbleRectChanged,
     required this.enableAiVoiceOutput,
     required this.isTtsReady,
     required this.isTtsGenerating,
@@ -44,25 +30,6 @@ class _BubbleItem extends StatefulWidget {
 
 class _BubbleItemState extends State<_BubbleItem> {
   bool _isHovered = false;
-  final GlobalKey _rowKey = GlobalKey();
-  final GlobalKey _bubbleContentKey = GlobalKey();
-
-  void _reportRects() {
-    // 回传当前行与气泡矩形，供父层做鼠标框选命中。
-    final rowCtx = _rowKey.currentContext;
-    final rowBox = rowCtx?.findRenderObject() as RenderBox?;
-    if (rowBox != null && rowBox.hasSize) {
-      final rowRect = rowBox.localToGlobal(Offset.zero) & rowBox.size;
-      widget.onRowRectChanged(rowRect);
-    }
-
-    final bubbleCtx = _bubbleContentKey.currentContext;
-    final bubbleBox = bubbleCtx?.findRenderObject() as RenderBox?;
-    if (bubbleBox != null && bubbleBox.hasSize) {
-      final bubbleRect = bubbleBox.localToGlobal(Offset.zero) & bubbleBox.size;
-      widget.onBubbleRectChanged(bubbleRect);
-    }
-  }
 
   bool get _isAttachmentBubble => widget.msg.content.startsWith('[附件] ');
   bool get _isImageBubble => widget.msg.content.startsWith('[图片] ');
@@ -293,12 +260,20 @@ class _BubbleItemState extends State<_BubbleItem> {
           // 文本选择统一交给列表层 SelectionArea，避免嵌套选择器造成跨空格/跨气泡拖选异常。
           selectable: false,
           styleSheet: MarkdownStyleSheet(
-            p: TextStyle(color: textColor, fontSize: 14, height: 1.4),
-            listBullet: TextStyle(color: textColor, fontSize: 14),
-            code: TextStyle(
-              backgroundColor: Colors.black26,
+            p: TextStyle(
               color: textColor,
-              fontFamily: 'monospace',
+              fontSize: 14,
+              height: 1.4,
+              fontFamilyFallback: AppTheme.fallbackFonts,
+            ),
+            listBullet: TextStyle(
+              color: textColor,
+              fontSize: 14,
+              fontFamilyFallback: AppTheme.fallbackFonts,
+            ),
+            code: const TextStyle(
+              color: Color(0xFF79C0FF),
+              fontFamilyFallback: AppTheme.monoFonts,
               fontSize: 13,
             ),
             codeblockDecoration: BoxDecoration(
@@ -318,33 +293,13 @@ class _BubbleItemState extends State<_BubbleItem> {
     );
   }
 
-  void _confirmDelete(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除消息'),
-        content: const Text('确定要在本地删除这条消息吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              widget.onDeleteMessage();
-            },
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   void _showDesktopMenu(BuildContext context, Offset position) async {
     if (widget.msg.isTyping) return;
+    final isMe = widget.msg.sender == MessageSender.me;
 
-    // 桌面端右键菜单：复制 / 多选 / 删除。
+    // 桌面端右键快捷菜单：复制 / 导出图片 / 删除
     final value = await showGeneralDialog<String>(
       context: context,
       barrierDismissible: true,
@@ -354,7 +309,7 @@ class _BubbleItemState extends State<_BubbleItem> {
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
         final size = MediaQuery.of(dialogContext).size;
         const menuWidth = 156.0;
-        const menuHeight = 134.0;
+        final menuHeight = isMe ? 92.0 : 136.0;
         const screenPadding = 8.0;
         final left = position.dx
             .clamp(screenPadding, size.width - menuWidth - screenPadding)
@@ -431,18 +386,19 @@ class _BubbleItemState extends State<_BubbleItem> {
                         children: [
                           menuItem(
                             value: 'copy',
-                            icon: Icons.copy,
-                            text: '复制',
+                            icon: Icons.copy_rounded,
+                            text: '复制文本',
                             radius: const BorderRadius.only(
                               topLeft: Radius.circular(14),
                               topRight: Radius.circular(14),
                             ),
                           ),
-                          menuItem(
-                            value: 'select',
-                            icon: Icons.checklist,
-                            text: '多选',
-                          ),
+                          if (!isMe)
+                            menuItem(
+                              value: 'export_image',
+                              icon: Icons.image_outlined,
+                              text: '导出为图片',
+                            ),
                           Divider(
                             height: 1,
                             thickness: 1,
@@ -451,7 +407,7 @@ class _BubbleItemState extends State<_BubbleItem> {
                           menuItem(
                             value: 'delete',
                             icon: Icons.delete_outline,
-                            text: '删除',
+                            text: '删除消息',
                             color: Colors.redAccent,
                             radius: const BorderRadius.only(
                               bottomLeft: Radius.circular(14),
@@ -481,12 +437,149 @@ class _BubbleItemState extends State<_BubbleItem> {
           duration: Duration(seconds: 1),
         ),
       );
-    } else if (value == 'select') {
-      widget.onEnterSelectionMode();
-      widget.onToggleSelection();
+    } else if (value == 'export_image') {
+      MessageShareCardDialog.show(
+        context,
+        msg: widget.msg,
+        personaName: widget.activePersonaId,
+      );
     } else if (value == 'delete') {
-      _confirmDelete(context);
+      widget.onDeleteMessage();
     }
+  }
+
+  Widget _buildActionIcon({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    Color? color,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 15, color: color ?? widget.colors.subtext),
+      splashRadius: 14,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+
+  Widget _buildAiActionBar(String timeStr) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 40, top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildActionIcon(
+            icon: Icons.copy_rounded,
+            tooltip: '复制',
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: widget.msg.content));
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('已复制到剪贴板'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              }
+            },
+          ),
+          const SizedBox(width: 4),
+          _buildActionIcon(
+            icon: Icons.image_outlined,
+            tooltip: '导出为图片',
+            onPressed: () {
+              MessageShareCardDialog.show(
+                context,
+                msg: widget.msg,
+                personaName: widget.activePersonaId,
+              );
+            },
+          ),
+          if (widget.enableAiVoiceOutput && !widget.msg.isTyping) ...[
+            const SizedBox(width: 4),
+            _buildActionIcon(
+              icon: widget.isTtsPlaying
+                  ? Icons.stop_circle_outlined
+                  : widget.isTtsGenerating
+                  ? Icons.hourglass_top_rounded
+                  : widget.isTtsReady
+                  ? Icons.volume_up_rounded
+                  : Icons.volume_up_outlined,
+              tooltip: widget.isTtsPlaying
+                  ? '停止朗读'
+                  : widget.isTtsGenerating
+                  ? '语音生成中'
+                  : widget.isTtsReady
+                  ? '朗读消息'
+                  : '生成并朗读',
+              onPressed: widget.isTtsGenerating ? null : widget.onReadAloudTap,
+              color: widget.isTtsPlaying ? widget.colors.accent : null,
+            ),
+          ],
+          const SizedBox(width: 4),
+          _buildActionIcon(
+            icon: Icons.delete_outline_rounded,
+            tooltip: '删除',
+            onPressed: widget.onDeleteMessage,
+            color: Colors.redAccent.withValues(alpha: 0.8),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            timeStr,
+            style: TextStyle(
+              fontSize: 11,
+              color: widget.colors.subtext.withValues(alpha: 0.45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUserActionBar(String timeStr) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8, top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            timeStr,
+            style: TextStyle(
+              fontSize: 11,
+              color: widget.colors.subtext.withValues(alpha: 0.45),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _buildActionIcon(
+            icon: Icons.copy_rounded,
+            tooltip: '复制',
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: widget.msg.content));
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('已复制到剪贴板'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              }
+            },
+          ),
+          const SizedBox(width: 4),
+          _buildActionIcon(
+            icon: Icons.delete_outline_rounded,
+            tooltip: '删除',
+            onPressed: widget.onDeleteMessage,
+            color: Colors.redAccent.withValues(alpha: 0.8),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -500,208 +593,89 @@ class _BubbleItemState extends State<_BubbleItem> {
         : widget.colors.onBubbleThem;
     final now = DateTime.now();
     final timeStr = widget.msg.time.year == now.year
-        ? DateFormat('MM-dd HH:mm:ss').format(widget.msg.time)
-        : DateFormat('yyyy-MM-dd HH:mm:ss').format(widget.msg.time);
+        ? DateFormat('MM-dd HH:mm').format(widget.msg.time)
+        : DateFormat('yyyy-MM-dd HH:mm').format(widget.msg.time);
+    final isCompact = MediaQuery.of(context).size.width <= 640;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _reportRects();
-    });
-
-    Widget bubbleWidget = Padding(
-      key: _rowKey,
-      padding: const EdgeInsets.only(bottom: 6),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
       child: MouseRegion(
         onEnter: (_) => setState(() => _isHovered = true),
         onExit: (_) => setState(() => _isHovered = false),
         child: Column(
-          crossAxisAlignment: isMe
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
+          crossAxisAlignment:
+              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            AnimatedOpacity(
-              opacity: _isHovered ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 200),
-              child: Padding(
-                padding: EdgeInsets.only(
-                  left: isMe ? 0 : 54.0,
-                  right: isMe ? 12.0 : 0,
-                  bottom: 4,
-                ),
-                child: Text(
-                  timeStr,
-                  style: TextStyle(
-                    color: widget.colors.subtext.withValues(alpha: 0.8),
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ),
             Listener(
               onPointerDown: (event) {
-                widget.onActivateForTextActions();
                 if (event.kind == PointerDeviceKind.mouse &&
-                    event.buttons == kSecondaryMouseButton &&
-                    !widget.isSelectionMode &&
-                    !widget.hasGlobalSelection()) {
+                    event.buttons == kSecondaryMouseButton) {
                   _showDesktopMenu(context, event.position);
                 }
               },
-              child: GestureDetector(
-                onTap: widget.isSelectionMode ? widget.onToggleSelection : null,
-                child: Container(
-                  color: widget.isSelected
-                      ? widget.colors.accent.withValues(alpha: 0.15)
-                      : Colors.transparent,
-                  child: Row(
-                    mainAxisAlignment: isMe
-                        ? MainAxisAlignment.end
-                        : MainAxisAlignment.start,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (widget.isSelectionMode && !isMe)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8, bottom: 8),
-                          child: AbsorbPointer(
-                            child: Checkbox(
-                              value: widget.isSelected,
-                              onChanged: (_) {},
-                              activeColor: widget.colors.accent,
-                            ),
-                          ),
-                        ),
-                      if (!isMe) ...[
-                        CircleAvatar(
-                          radius: 16,
-                          backgroundColor: widget.colors.accent,
-                          child: const Text(
-                            '流',
-                            style: TextStyle(color: Colors.white, fontSize: 12),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Flexible(
-                        child: Container(
-                          key: _bubbleContentKey,
-                          constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width <= 640
-                                ? MediaQuery.of(context).size.width * 0.78
-                                : MediaQuery.of(context).size.width * 0.55,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: bubbleColor,
-                            borderRadius: BorderRadius.only(
-                              topLeft: const Radius.circular(16),
-                              topRight: const Radius.circular(16),
-                              bottomLeft: Radius.circular(isMe ? 16 : 4),
-                              bottomRight: Radius.circular(isMe ? 4 : 16),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.08),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: _buildBubbleContent(textColor),
-                        ),
+              child: Row(
+                mainAxisAlignment:
+                    isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (!isMe) ...[
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: widget.colors.accent,
+                      child: Text(
+                        widget.activePersonaId.isNotEmpty
+                            ? widget.activePersonaId.characters.first
+                            : '流',
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
                       ),
-                      if (!isMe &&
-                          widget.enableAiVoiceOutput &&
-                          !widget.msg.isTyping)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 6, bottom: 2),
-                          child: IconButton(
-                            tooltip: widget.isTtsPlaying
-                                ? '停止朗读'
-                                : widget.isTtsGenerating
-                                ? '语音生成中'
-                                : widget.isTtsReady
-                                ? '朗读消息'
-                                : '生成并朗读',
-                            onPressed: widget.isTtsGenerating
-                                ? null
-                                : widget.onReadAloudTap,
-                            icon: Icon(
-                              widget.isTtsPlaying
-                                  ? Icons.stop_circle_outlined
-                                  : widget.isTtsGenerating
-                                  ? Icons.hourglass_top_rounded
-                                  : widget.isTtsReady
-                                  ? Icons.volume_up_rounded
-                                  : Icons.volume_up_outlined,
-                              size: 18,
-                              color: widget.colors.subtext,
-                            ),
-                            style: IconButton.styleFrom(
-                              minimumSize: const Size(28, 28),
-                              padding: EdgeInsets.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              backgroundColor: widget.colors.inputBg,
-                            ),
-                          ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Flexible(
+                    child: Container(
+                      constraints: BoxConstraints(
+                        maxWidth: isCompact
+                            ? MediaQuery.of(context).size.width * 0.82
+                            : MediaQuery.of(context).size.width * 0.65,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: bubbleColor,
+                        borderRadius: BorderRadius.only(
+                          topLeft: const Radius.circular(16),
+                          topRight: const Radius.circular(16),
+                          bottomLeft: Radius.circular(isMe ? 16 : 4),
+                          bottomRight: Radius.circular(isMe ? 4 : 16),
                         ),
-                      if (isMe) const SizedBox(width: 8),
-                      if (widget.isSelectionMode && isMe)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 8, bottom: 8),
-                          child: AbsorbPointer(
-                            child: Checkbox(
-                              value: widget.isSelected,
-                              onChanged: (_) {},
-                              activeColor: widget.colors.accent,
-                            ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.08),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
                           ),
-                        ),
-                    ],
+                        ],
+                      ),
+                      child: _buildBubbleContent(textColor),
+                    ),
                   ),
-                ),
+                ],
               ),
+            ),
+            // 底部轻量动作栏
+            AnimatedOpacity(
+              opacity: (isCompact || _isHovered) ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 150),
+              child: isMe
+                  ? _buildUserActionBar(timeStr)
+                  : _buildAiActionBar(timeStr),
             ),
           ],
         ),
       ),
     );
-    return bubbleWidget;
-  }
-}
-
-class _SelectionMarqueePainter extends CustomPainter {
-  final Rect rect;
-
-  _SelectionMarqueePainter(this.rect);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // 允许用户反向拖动，先归一化成标准矩形再绘制。
-    final normalized = Rect.fromLTRB(
-      rect.left < rect.right ? rect.left : rect.right,
-      rect.top < rect.bottom ? rect.top : rect.bottom,
-      rect.left > rect.right ? rect.left : rect.right,
-      rect.top > rect.bottom ? rect.top : rect.bottom,
-    );
-
-    final fillPaint = Paint()
-      ..color = const Color(0x334A90E2)
-      ..style = PaintingStyle.fill;
-    final borderPaint = Paint()
-      ..color = const Color(0xFF4A90E2)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-
-    canvas.drawRect(normalized, fillPaint);
-    canvas.drawRect(normalized, borderPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _SelectionMarqueePainter oldDelegate) {
-    return oldDelegate.rect != rect;
   }
 }
 

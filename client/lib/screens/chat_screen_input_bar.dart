@@ -165,7 +165,27 @@ class CodeElementBuilder extends MarkdownElementBuilder {
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     if (!element.textContent.endsWith('\n')) {
-      return null;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+        margin: const EdgeInsets.symmetric(horizontal: 2.5),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E232A),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: const Color(0xFF38444D),
+            width: 0.8,
+          ),
+        ),
+        child: Text(
+          element.textContent,
+          style: const TextStyle(
+            fontFamilyFallback: AppTheme.monoFonts,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF79C0FF),
+          ),
+        ),
+      );
     }
 
     // 如果存在 language-xxx 类，仍可以用来扩展不同块的风格
@@ -186,7 +206,7 @@ class CodeElementBuilder extends MarkdownElementBuilder {
           child: Text(
             element.textContent.substring(0, element.textContent.length - 1),
             style: const TextStyle(
-              fontFamily: 'monospace',
+              fontFamilyFallback: AppTheme.monoFonts,
               fontSize: 13,
               height: 1.5,
               color: Color(0xFFABB2BF), // 简单的原子灰回退以防止 Highlighter 兼容性报错

@@ -7,10 +7,6 @@ class _TopBar extends StatelessWidget {
   final LumiColors colors;
   final WsService ws;
   final String activePersonaId;
-  final bool isSelectionMode;
-  final int selectedCount;
-  final VoidCallback onCancelSelection;
-  final VoidCallback onDeleteSelected;
   final VoidCallback? onOpenSidebar;
   final bool isSidebarOpen;
   final VoidCallback? onToggleLive2d;
@@ -20,10 +16,6 @@ class _TopBar extends StatelessWidget {
     required this.colors,
     required this.ws,
     required this.activePersonaId,
-    this.isSelectionMode = false,
-    this.selectedCount = 0,
-    required this.onCancelSelection,
-    required this.onDeleteSelected,
     this.onOpenSidebar,
     this.isSidebarOpen = false,
     this.onToggleLive2d,
@@ -265,69 +257,6 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (isSelectionMode) {
-      return SafeArea(
-        bottom: false,
-        child: Container(
-          height: 52,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          color: colors.sidebar,
-          child: Row(
-            children: [
-              IconButton(
-                icon: Icon(Icons.close, color: colors.subtext),
-                onPressed: onCancelSelection,
-                tooltip: '取消多选',
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '已选择 $selectedCount 项',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-              const Spacer(),
-              if (selectedCount > 0)
-                IconButton(
-                  icon: const Icon(
-                    Icons.delete_outline,
-                    color: Colors.redAccent,
-                  ),
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('删除消息'),
-                        content: Text('确定要删除选中的 $selectedCount 条消息吗？'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('取消'),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Navigator.pop(context);
-                              onDeleteSelected();
-                            },
-                            child: const Text(
-                              '删除',
-                              style: TextStyle(color: Colors.red),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                  tooltip: '删除选中项',
-                ),
-            ],
-          ),
-        ),
-      );
-    }
-
     // 工作区与会话标题提取
     final wsPath = ws.activeWorkspacePath;
     final wsName = wsPath.isNotEmpty

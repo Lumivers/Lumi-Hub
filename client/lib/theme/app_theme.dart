@@ -10,8 +10,24 @@ class AppTheme {
   static const _lightText = Color(0xFF000000);
   static const _lightBg = Color(0xFFF0F2F5);
 
+  static const fallbackFonts = <String>[
+    'Noto Color Emoji',
+    'Apple Color Emoji',
+    'Segoe UI Emoji',
+    'sans-serif',
+  ];
+
+  static const monoFonts = <String>[
+    'Noto Sans Mono',
+    'DejaVu Sans Mono',
+    'Liberation Mono',
+    'monospace',
+    'sans-serif',
+  ];
+
   static ThemeData dark({String? fontFamily}) {
     // 深色主题：应用级色板 + 自定义扩展色。
+    final base = ThemeData.dark();
     return ThemeData(
       brightness: Brightness.dark,
       scaffoldBackgroundColor: _darkBg,
@@ -20,13 +36,25 @@ class AppTheme {
         surface: _darkBg,
         onSurface: _darkText,
       ),
+      inputDecorationTheme: InputDecorationTheme(
+        hintStyle: TextStyle(
+          color: _darkText.withValues(alpha: 0.35),
+        ),
+        prefixIconColor: _darkText.withValues(alpha: 0.5),
+      ),
       fontFamily: fontFamily,
+      fontFamilyFallback: fallbackFonts,
+      textTheme: base.textTheme.apply(
+        fontFamily: fontFamily,
+        fontFamilyFallback: fallbackFonts,
+      ),
       extensions: [LumiColors.dark()],
     );
   }
 
   static ThemeData light({String? fontFamily}) {
     // 浅色主题：应用级色板 + 自定义扩展色。
+    final base = ThemeData.light();
     return ThemeData(
       brightness: Brightness.light,
       scaffoldBackgroundColor: _lightBg,
@@ -35,7 +63,18 @@ class AppTheme {
         surface: _lightBg,
         onSurface: _lightText,
       ),
+      inputDecorationTheme: InputDecorationTheme(
+        hintStyle: TextStyle(
+          color: _lightText.withValues(alpha: 0.35),
+        ),
+        prefixIconColor: _lightText.withValues(alpha: 0.5),
+      ),
       fontFamily: fontFamily,
+      fontFamilyFallback: fallbackFonts,
+      textTheme: base.textTheme.apply(
+        fontFamily: fontFamily,
+        fontFamilyFallback: fallbackFonts,
+      ),
       extensions: [LumiColors.light()],
     );
   }
