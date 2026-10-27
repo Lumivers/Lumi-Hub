@@ -9,6 +9,7 @@ import json
 import uuid
 import time
 import logging
+import fnmatch
 from typing import Optional, Callable
 from .trace_collector import TraceCollector, StepTrace
 
@@ -131,6 +132,149 @@ def get_workspace_summary(workspace_dir: str, max_depth: int = 2, max_entries: i
     }
 
 
+# ==========================================
+# 工具重复调用看门狗 (Repeat Tool Reminder)
+# 参考 @deepseek-ai/dsh-repeat-tool-reminder
+# ==========================================
+
+GENTLE_REMINDER = (
+    "You are repeating the exact same tool call with identical arguments. "
+    "Carefully analyze the previous result before calling again: if the task is "
+    "not complete, try a different approach or different arguments instead of "
+    "repeating the call."
+)
+
+
+def detailed_reminder(tool_name: str, count: int, canonical_arguments: str) -> str:
+    return (
+        "Repeated tool call detected:\n"
+        f"- tool: {tool_name}\n"
+        f"- consecutive_calls: {count}\n"
+        f"- arguments: {canonical_arguments}\n"
+        "The repeated calls are not making progress. Do not call this tool with "
+        "these exact arguments again. Inspect the latest result and choose a "
+        "different action, different arguments, or finish the task if enough "
+        "evidence has been gathered."
+    )
+
+
+def sort_json_value(value):
+    """Deep key-sort of a JSON-serializable structure."""
+    if isinstance(value, list):
+        return [sort_json_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: sort_json_value(value[k]) for k in sorted(value.keys())}
+    return value
+
+
+def canonicalize(arguments_value) -> str:
+    """Canonical string form of tool arguments: deep key-sort, then JSON stringify."""
+    if isinstance(arguments_value, str):
+        try:
+            parsed = json.loads(arguments_value)
+            return json.dumps(sort_json_value(parsed), ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return arguments_value
+    try:
+        return json.dumps(sort_json_value(arguments_value), ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return str(arguments_value)
+
+
+def preview_arguments(canonical: str, cap: int = 500) -> str:
+    """Head-truncate canonical arguments for the detailed reminder."""
+    if len(canonical) <= cap:
+        return canonical
+    return f"{canonical[:cap]}… (+{len(canonical) - cap} more chars)"
+
+
+class RepeatToolWatchdog:
+    """工具重复调用看门狗 (Repeat Tool Reminder Guard)。
+
+    灵感源自 DeepSeek-Harness:
+    - 跟踪连续相同工具与参数调用（无论 dict 键顺序如何深层规范化）
+    - 在达到阈值（默认 3, 5, 8）时向上下文注入渐进式提醒（第 1 档温和提示，后续严厉告警）
+    - 非连续或不同参数调用即重置计数；未追踪的工具调用保持透明
+    """
+
+    def __init__(
+        self,
+        thresholds: list[int] = None,
+        include: list[str] = None,
+        exclude: list[str] = None,
+        arguments_preview_chars: int = 500,
+    ):
+        raw_thresholds = thresholds if thresholds is not None else [3, 5, 8]
+        self.thresholds = self._validate_thresholds(raw_thresholds)
+        self.threshold_set = set(self.thresholds)
+        self.include = list(include) if include else []
+        self.exclude = list(exclude) if exclude else []
+        if not isinstance(arguments_preview_chars, int) or isinstance(arguments_preview_chars, bool) or arguments_preview_chars < 1:
+            raise ValueError(
+                f"RepeatToolWatchdog: invalid arguments_preview_chars {arguments_preview_chars} — must be an integer >= 1"
+            )
+        self.arguments_preview_chars = arguments_preview_chars
+
+        self._last_key: Optional[str] = None
+        self._repeat_count: int = 0
+
+    @staticmethod
+    def _validate_thresholds(values: list[int]) -> list[int]:
+        if not values:
+            raise ValueError("RepeatToolWatchdog: `thresholds` must not be empty")
+        for val in values:
+            if not isinstance(val, int) or isinstance(val, bool) or val < 2:
+                raise ValueError(f"RepeatToolWatchdog: invalid threshold {val} — must be an integer >= 2")
+        if len(set(values)) != len(values):
+            raise ValueError("RepeatToolWatchdog: `thresholds` must not contain duplicates")
+        return sorted(values)
+
+    @property
+    def repeat_count(self) -> int:
+        return self._repeat_count
+
+    def reset(self):
+        """重置连续调用计数器（如收到新一轮用户输入时）。"""
+        self._last_key = None
+        self._repeat_count = 0
+
+    def _is_tracked(self, tool_name: str) -> bool:
+        if self.include:
+            if not any(fnmatch.fnmatch(tool_name, pat) for pat in self.include):
+                return False
+        if self.exclude:
+            if any(fnmatch.fnmatch(tool_name, pat) for pat in self.exclude):
+                return False
+        return True
+
+    def record_call(self, tool_name: str, tool_args) -> Optional[str]:
+        """记录一次工具调用，并检查是否达到重复报警阈值。
+
+        如果达到报警阈值，返回提醒文本；否则返回 None。
+        """
+        if not self._is_tracked(tool_name):
+            # 未追踪工具透明处理（不增加计数，也不打断已有计数链，与 DSH 保持一致）
+            return None
+
+        canonical = canonicalize(tool_args)
+        key = json.dumps([tool_name, canonical], ensure_ascii=False)
+
+        if self._last_key == key:
+            self._repeat_count += 1
+        else:
+            self._last_key = key
+            self._repeat_count = 1
+
+        if self._repeat_count not in self.threshold_set:
+            return None
+
+        if self._repeat_count == self.thresholds[0]:
+            return GENTLE_REMINDER
+        else:
+            preview = preview_arguments(canonical, self.arguments_preview_chars)
+            return detailed_reminder(tool_name, self._repeat_count, preview)
+
+
 class AgentLoop:
     """独立 ReAct Agent 运行时。
 
@@ -177,6 +321,9 @@ class AgentLoop:
         # 任务 Trace 收集器
         self.trace_collector = TraceCollector(session_id=self.session_id, msg_id=self.msg_id)
 
+        # 工具重复调用看门狗 (Repeat Tool Reminder)
+        self.watchdog = RepeatToolWatchdog()
+
         # 是否被取消
         self._cancelled = False
 
@@ -199,6 +346,9 @@ class AgentLoop:
         5. 发送 CHAT_RESPONSE_END 解锁前端
         """
         try:
+            # 重置看门狗状态（每轮用户 prompt 开启全新监测链路）
+            self.watchdog.reset()
+
             # 1. 长对话历史 Token 压缩与滑动窗口提炼
             compacted_history = await self._compact_history_if_needed(self.history)
 
@@ -357,11 +507,21 @@ class AgentLoop:
                         # 每步工具执行完成后立即持久化 Trace 状态，避免进程中断后丢失
                         self._persist_current_state(full_text=full_text)
 
+                        # 看门狗检测：是否连续重复调用同一工具与参数
+                        reminder = self.watchdog.record_call(tool_name, tool_args)
+                        content_for_llm = result
+                        if reminder:
+                            logger.warning(
+                                f"[AgentLoop] 触发工具重复调用看门狗提示: tool={tool_name}, "
+                                f"consecutive_calls={self.watchdog.repeat_count}"
+                            )
+                            content_for_llm = f"{result}\n\n[Repeat Tool Call Reminder]\n{reminder}"
+
                         # 将工具结果回填到 messages (保持未经裁剪的完整输出，供下一轮即时消费)
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": result,
+                            "content": content_for_llm,
                         })
 
                     # 继续循环，让 LLM 处理工具结果

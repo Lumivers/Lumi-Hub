@@ -16,6 +16,10 @@ from host.agent_loop import (
     estimate_messages_tokens,
     HISTORY_TOKEN_THRESHOLD,
     KEEP_RECENT_MESSAGES,
+    RepeatToolWatchdog,
+    GENTLE_REMINDER,
+    detailed_reminder,
+    canonicalize,
 )
 from host.ws_server import LumiWSServer
 
@@ -286,6 +290,194 @@ class TestLLMProviderAndPresets(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(msg.get("extra"))
             self.assertEqual(msg["extra"]["traces"][0]["tool_name"], "run_command")
             self.assertEqual(msg["extra"]["files_changed"][0]["path"], "/workspace/main.dart")
+
+
+class TestRepeatToolWatchdog(unittest.IsolatedAsyncioTestCase):
+    """验证工具重复调用看门狗 (Repeat Tool Reminder) 各项契约。"""
+
+    def test_threshold_escalation(self):
+        dog = RepeatToolWatchdog()
+        args = {"path": "test.txt", "mode": "r"}
+
+        # 1-2 次调用：无报警
+        self.assertIsNone(dog.record_call("read_file", args))
+        self.assertEqual(dog.repeat_count, 1)
+        self.assertIsNone(dog.record_call("read_file", args))
+        self.assertEqual(dog.repeat_count, 2)
+
+        # 第 3 次调用：触发第 1 档温和提示 (GENTLE_REMINDER)
+        r3 = dog.record_call("read_file", args)
+        self.assertEqual(dog.repeat_count, 3)
+        self.assertEqual(r3, GENTLE_REMINDER)
+        self.assertIn("repeating the exact same tool call", r3)
+
+        # 第 4 次调用：非阈值点，静默
+        self.assertIsNone(dog.record_call("read_file", args))
+        self.assertEqual(dog.repeat_count, 4)
+
+        # 第 5 次调用：触发第 2 档严厉告警
+        r5 = dog.record_call("read_file", args)
+        self.assertEqual(dog.repeat_count, 5)
+        self.assertIn("Repeated tool call detected:", r5)
+        self.assertIn("- tool: read_file", r5)
+        self.assertIn("- consecutive_calls: 5", r5)
+        self.assertIn('{"mode":"r","path":"test.txt"}', r5)
+
+        # 第 6-7 次调用：非阈值点
+        self.assertIsNone(dog.record_call("read_file", args))
+        self.assertIsNone(dog.record_call("read_file", args))
+
+        # 第 8 次调用：触发第 3 档告警
+        r8 = dog.record_call("read_file", args)
+        self.assertEqual(dog.repeat_count, 8)
+        self.assertIn("- consecutive_calls: 8", r8)
+
+    def test_canonicalization_deep(self):
+        """测试无论嵌套字典键顺序如何变化，均能识别为同一调用。"""
+        dog = RepeatToolWatchdog()
+        d1 = {"b": 2, "a": 1, "nested": {"y": [1, 2], "x": "ok"}}
+        d2 = {"nested": {"x": "ok", "y": [1, 2]}, "a": 1, "b": 2}
+        d3 = {"a": 1, "nested": {"y": [1, 2], "x": "ok"}, "b": 2}
+
+        self.assertIsNone(dog.record_call("probe", d1))
+        self.assertIsNone(dog.record_call("probe", d2))
+        r3 = dog.record_call("probe", d3)
+        self.assertEqual(dog.repeat_count, 3)
+        self.assertEqual(r3, GENTLE_REMINDER)
+
+    def test_resets_on_arg_change_and_tool_change(self):
+        dog = RepeatToolWatchdog()
+        self.assertIsNone(dog.record_call("read_file", {"path": "a.txt"}))
+        self.assertIsNone(dog.record_call("read_file", {"path": "a.txt"}))
+        self.assertEqual(dog.repeat_count, 2)
+
+        # 参数变更，重置计数链
+        self.assertIsNone(dog.record_call("read_file", {"path": "b.txt"}))
+        self.assertEqual(dog.repeat_count, 1)
+
+        self.assertIsNone(dog.record_call("read_file", {"path": "b.txt"}))
+        r3 = dog.record_call("read_file", {"path": "b.txt"})
+        self.assertEqual(dog.repeat_count, 3)
+        self.assertEqual(r3, GENTLE_REMINDER)
+
+        # 更换不同工具，重置计数链
+        self.assertIsNone(dog.record_call("grep_code", {"pattern": "abc"}))
+        self.assertEqual(dog.repeat_count, 1)
+
+    def test_reset_method(self):
+        dog = RepeatToolWatchdog()
+        dog.record_call("probe", {})
+        dog.record_call("probe", {})
+        self.assertEqual(dog.repeat_count, 2)
+
+        dog.reset()
+        self.assertEqual(dog.repeat_count, 0)
+        dog.record_call("probe", {})
+        self.assertEqual(dog.repeat_count, 1)
+
+    def test_arguments_preview_truncation(self):
+        dog = RepeatToolWatchdog(thresholds=[2, 3], arguments_preview_chars=20)
+        long_arg = {"content": "X" * 150}
+
+        dog.record_call("write", long_arg)
+        r2 = dog.record_call("write", long_arg)
+        self.assertEqual(r2, GENTLE_REMINDER)
+
+        r3 = dog.record_call("write", long_arg)
+        self.assertIn("consecutive_calls: 3", r3)
+        self.assertIn("… (+", r3)
+        self.assertNotIn("X" * 150, r3)
+
+    def test_exclude_and_include(self):
+        # 排除工具对连续链保持透明：既不计入，也不打断已有链条
+        dog = RepeatToolWatchdog(exclude=["ping*"])
+        self.assertIsNone(dog.record_call("probe", {"id": 1}))
+        self.assertIsNone(dog.record_call("ping_server", {"host": "127.0.0.1"}))  # 透明
+        self.assertIsNone(dog.record_call("probe", {"id": 1}))
+        self.assertIsNone(dog.record_call("ping_server", {}))  # 透明
+        r3 = dog.record_call("probe", {"id": 1})
+        self.assertEqual(dog.repeat_count, 3)
+        self.assertEqual(r3, GENTLE_REMINDER)
+
+        # include 白名单测试
+        dog_inc = RepeatToolWatchdog(include=["pro*"])
+        for _ in range(5):
+            self.assertIsNone(dog_inc.record_call("other", {}))
+        self.assertEqual(dog_inc.repeat_count, 0)
+
+    def test_validation_errors(self):
+        with self.assertRaises(ValueError):
+            RepeatToolWatchdog(thresholds=[])
+        with self.assertRaises(ValueError):
+            RepeatToolWatchdog(thresholds=[1, 3])
+        with self.assertRaises(ValueError):
+            RepeatToolWatchdog(thresholds=[3, 3])
+        with self.assertRaises(ValueError):
+            RepeatToolWatchdog(arguments_preview_chars=0)
+
+    async def test_agent_loop_watchdog_integration(self):
+        """端到端验证：AgentLoop 在遭遇模型连续 3 次调用同一工具时，自动注入看门狗警告。"""
+        class RepeatToolMockLLM:
+            def __init__(self):
+                self.turn = 0
+                self.last_messages = []
+
+            async def chat_stream(self, messages, tools=None):
+                self.turn += 1
+                self.last_messages = list(messages)
+                if self.turn <= 3:
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [
+                            {
+                                "id": f"tc_{self.turn}",
+                                "name": "dummy_tool",
+                                "arguments": {"cmd": "check_status"},
+                            }
+                        ],
+                    }
+                else:
+                    yield {"type": "text", "content": "任务已终止"}
+
+        class RepeatMockTools:
+            async def get_all_schemas_with_mcp(self):
+                return [{"type": "function", "function": {"name": "dummy_tool", "parameters": {}}}]
+
+            async def execute(self, name, arguments, auth_callback=None):
+                return "status: pending"
+
+        mock_llm = RepeatToolMockLLM()
+        mock_tools = RepeatMockTools()
+
+        loop = AgentLoop(
+            llm_provider=mock_llm,
+            tool_registry=mock_tools,
+            persona_system_prompt="You are Lumi.",
+            history_messages=[],
+            ws_server=None,
+            ws_session_id="ws-1",
+            user_id=1,
+            persona_id="default",
+            db=None,
+        )
+
+        # Mock 发送事件，避免 None ws_server 报错
+        async def dummy_send_event(msg):
+            pass
+        loop._send_event = dummy_send_event
+
+        await loop.run("请执行监控")
+
+        self.assertEqual(mock_llm.turn, 4)
+        self.assertEqual(loop.watchdog.repeat_count, 3)
+
+        # 检查第 4 轮请求中传入的工具消息：前 2 轮正常，第 3 轮带看门狗提醒
+        tool_results = [m for m in mock_llm.last_messages if m.get("role") == "tool"]
+        self.assertEqual(len(tool_results), 3)
+        self.assertNotIn("[Repeat Tool Call Reminder]", tool_results[0]["content"])
+        self.assertNotIn("[Repeat Tool Call Reminder]", tool_results[1]["content"])
+        self.assertIn("[Repeat Tool Call Reminder]", tool_results[2]["content"])
+        self.assertIn("repeating the exact same tool call", tool_results[2]["content"])
 
 
 if __name__ == "__main__":
