@@ -370,13 +370,6 @@ class AgentLoop:
                 else:
                     # 纯文本回复，保存到数据库及 Trace 状态
                     self._persist_current_state(full_text=full_text)
-
-                    # 触发记忆提取（异步，不阻塞回复）
-                    if self.memory_manager and full_text:
-                        asyncio.create_task(
-                            self._extract_memories(user_message, full_text)
-                        )
-
                     break
 
             # 尝试通过 git diff 检测本次任务产生的文件变动
@@ -693,27 +686,31 @@ class AgentLoop:
         except Exception as e:
             logger.warning(f"[AgentLoop] 实时持久化 Trace 异常: {e}")
 
-    def _compact_messages(self, messages: list[dict], keep_recent_tools: int = 2) -> list[dict]:
-        """Observation Compaction (过桥抽板):
-        对历史消息中过早的 tool observation 进行剪枝压缩，避免上下文与 Token 膨胀。
-        仅保留最近 keep_recent_tools 次工具调用的完整输出，更早的输出若超过 300 字符则折叠成摘要。
+    def _compact_messages(
+        self,
+        messages: list[dict],
+        threshold_chars: int = 8192,
+        head_chars: int = 4096,
+        tail_chars: int = 1024,
+        **kwargs,
+    ) -> list[dict]:
+        """Tool Result Pruning (参考 DeepSeek Harness 官方标准):
+        对超大工具输出进行头尾修剪，避免上下文与 Token 膨胀。
+        8192 字符以下完整保留（不破坏代码文件阅读与定位）；
+        超出 8192 字符则保留前 4096 字符 (head) + 后 1024 字符 (tail)，中间折叠。
         """
         compacted = []
-        tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-        uncompressed_indices = set(tool_indices[-keep_recent_tools:]) if tool_indices else set()
-
-        for idx, msg in enumerate(messages):
-            if msg.get("role") == "tool" and idx not in uncompressed_indices:
+        for msg in messages:
+            if msg.get("role") == "tool":
                 content = msg.get("content", "")
-                if len(content) > 300:
-                    lines = content.strip().splitlines()
-                    summary_head = lines[0] if lines else ""
-                    summary_tail = lines[-1] if len(lines) > 1 else ""
+                if isinstance(content, str) and len(content) > threshold_chars:
+                    head = content[:head_chars]
+                    tail = content[-tail_chars:] if tail_chars > 0 else ""
+                    pruned_chars = len(content) - head_chars - tail_chars
                     pruned_content = (
-                        f"[Observation Pruned (Context Compaction)]\n"
-                        f"Original output was {len(content)} chars ({len(lines)} lines).\n"
-                        f"Summary Head: {summary_head[:120]}\n"
-                        f"Summary Tail: {summary_tail[:120]}"
+                        f"{head}\n\n"
+                        f"[... tool result middle pruned ({pruned_chars} chars) ...]\n\n"
+                        f"{tail}"
                     )
                     compacted.append({**msg, "content": pruned_content})
                     continue
@@ -803,17 +800,3 @@ class AgentLoop:
         else:
             logger.warning(f"[AgentLoop] 用户拒绝了操作: {action_type}")
             return False
-
-    async def _extract_memories(self, user_message: str, assistant_response: str):
-        """异步提取对话记忆。不阻塞主流程。"""
-        try:
-            if self.memory_manager:
-                conversation = [
-                    {"role": "user", "content": user_message},
-                    {"role": "assistant", "content": assistant_response},
-                ]
-                await self.memory_manager.extract_memories(
-                    self.user_id, self.persona_id, conversation
-                )
-        except Exception as e:
-            logger.warning(f"[AgentLoop] 记忆提取失败（不影响主流程）: {e}")

@@ -223,16 +223,24 @@ class TestLLMProviderAndPresets(unittest.IsolatedAsyncioTestCase):
         p_ollama = create_provider(provider_type="ollama", base_url="http://localhost:11434/v1", model="qwen2.5:latest")
         self.assertIsInstance(p_ollama, OllamaProvider)
 
-    def test_revert_file_backup(self):
+    def test_revert_file_git(self):
         from host.native_tools import write_file, revert_file
         import tempfile
+        import subprocess
         with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, check=True)
             test_file = os.path.join(tmpdir, "test.txt")
             with open(test_file, "w") as f:
                 f.write("original content")
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, capture_output=True, check=True)
+
             write_file(test_file, "modified content")
             with open(test_file, "r") as f:
                 self.assertEqual(f.read(), "modified content")
+
             ok, msg = revert_file(test_file, workspace_dir=tmpdir)
             self.assertTrue(ok)
             with open(test_file, "r") as f:

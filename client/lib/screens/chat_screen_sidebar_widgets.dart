@@ -9,8 +9,6 @@ class _TopBar extends StatelessWidget {
   final String activePersonaId;
   final VoidCallback? onOpenSidebar;
   final bool isSidebarOpen;
-  final VoidCallback? onToggleLive2d;
-  final bool isLive2dOpen;
 
   const _TopBar({
     required this.colors,
@@ -18,8 +16,6 @@ class _TopBar extends StatelessWidget {
     required this.activePersonaId,
     this.onOpenSidebar,
     this.isSidebarOpen = false,
-    this.onToggleLive2d,
-    this.isLive2dOpen = false,
   });
 
   void _showModelMenu(BuildContext buttonContext, BuildContext context) async {
@@ -435,20 +431,6 @@ class _TopBar extends StatelessWidget {
               ),
             ),
 
-            const SizedBox(width: 8),
-
-            // ── 角色展台开关 ──
-            if (onToggleLive2d != null)
-              IconButton(
-                icon: Icon(
-                  Icons.face_retouching_natural,
-                  size: 20,
-                  color: isLive2dOpen ? colors.accent : colors.subtext,
-                ),
-                onPressed: onToggleLive2d,
-                tooltip: isLive2dOpen ? '收起角色展台' : '展开角色展台',
-                splashRadius: 18,
-              ),
           ],
         ),
       ),

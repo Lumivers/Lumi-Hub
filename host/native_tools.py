@@ -42,31 +42,8 @@ def read_file(path: str, start_line: int = 1, end_line: int = None) -> str:
     except Exception as e:
         return f"Error reading file: {e}"
 
-def backup_file(path: str) -> bool:
-    """修改文件前备份。失败时记录错误并返回 False。"""
-    try:
-        if not os.path.exists(path):
-            return False
-        
-        # 获取绝对路径以避免 CWD 变化导致的路径问题。
-        abs_path = os.path.abspath(path)
-        base_dir = os.path.dirname(abs_path)
-        cache_dir = os.path.join(base_dir, ".Lumi_cache")
-        
-        os.makedirs(cache_dir, exist_ok=True)
-        filename = os.path.basename(abs_path)
-        timestamp = int(time.time())
-        backup_path = os.path.join(cache_dir, f"{filename}.{timestamp}.bak")
-        
-        shutil.copy2(abs_path, backup_path)
-        logger.info(f"[Lumi-Hub] 备份成功: {abs_path} -> {backup_path}")
-        return True
-    except Exception as e:
-        logger.error(f"[Lumi-Hub] 备份失败! 路径: {path}, 错误: {str(e)}")
-        return False
-
 def revert_file(path: str, workspace_dir: str = None) -> tuple[bool, str]:
-    """回退单个文件的修改。优先使用 Git restore，如果未纳入版本控制，尝试从 .Lumi_cache 恢复最近的备份。"""
+    """回退单个文件的修改。基于 Git 进行还原（已跟踪文件使用 git checkout，新创建的未跟踪文件自动删除）。"""
     import subprocess
     try:
         abs_path = os.path.abspath(path)
@@ -108,22 +85,7 @@ def revert_file(path: str, workspace_dir: str = None) -> tuple[bool, str]:
                     logger.info(f"[Lumi-Hub] 回退代码：Git 已还原 {abs_path}")
                     return True, f"已通过 Git 还原 {os.path.basename(abs_path)}"
 
-        # 2. 从 .Lumi_cache 备份还原
-        cache_dir = os.path.join(base_dir, ".Lumi_cache")
-        filename = os.path.basename(abs_path)
-        if os.path.isdir(cache_dir):
-            bak_files = [
-                f for f in os.listdir(cache_dir)
-                if f.startswith(f"{filename}.") and f.endswith(".bak")
-            ]
-            if bak_files:
-                bak_files.sort(reverse=True)
-                latest_bak = os.path.join(cache_dir, bak_files[0])
-                shutil.copy2(latest_bak, abs_path)
-                logger.info(f"[Lumi-Hub] 回退代码：已从备份还原 {abs_path} <- {latest_bak}")
-                return True, f"已从备份文件还原 {filename}"
-
-        return False, f"未找到 {filename} 的还原方式（无 Git 变更或备份）"
+        return False, f"未检测到 {os.path.basename(abs_path)} 的 Git 变更（或该工作区未纳入 Git）"
     except Exception as e:
         logger.error(f"[Lumi-Hub] 回退文件失败! 路径: {path}, 错误: {e}")
         return False, f"还原 {path} 失败: {e}"
@@ -149,12 +111,8 @@ def list_dir(path: str) -> str:
 
         
 def write_file(path: str, content: str) -> str:
-    """写入文件内容 (会先进行安全备份)"""
+    """写入文件内容"""
     try:
-        if os.path.exists(path):
-            if not backup_file(path):
-                return f"Error: Failed to backup {path}. Operation aborted for safety."
-        
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
         return f"Successfully wrote to {path}"
@@ -162,16 +120,12 @@ def write_file(path: str, content: str) -> str:
         return f"Error writing file: {e}"
 
 def delete_file(path: str) -> str:
-    """删除文件 (会先进入 .Lumi_cache 备份，随后物理删除)"""
+    """删除文件"""
     try:
         if not os.path.exists(path):
             return f"Error: File '{path}' does not exist."
-        
-        if not backup_file(path):
-            return f"Error: Failed to backup {path}. Deletion aborted for safety."
-            
         os.remove(path)
-        return f"Successfully deleted {path} (backup created in .Lumi_cache)"
+        return f"Successfully deleted {path}"
     except Exception as e:
         return f"Error deleting file: {e}"
 
@@ -191,9 +145,6 @@ def replace_content(path: str, old_content: str, new_content: str) -> str:
         if count > 1:
             return f"Error: Found {count} occurrences of the target content. Please provide a more unique snippet to replace."
         
-        if not backup_file(path):
-            return f"Error: Failed to backup {path}. Modification aborted for safety."
-            
         updated_text = text.replace(old_content, new_content)
         
         with open(path, 'w', encoding='utf-8') as f:
@@ -218,9 +169,6 @@ def insert_content(path: str, line_number: int, content: str) -> str:
             lines.append(content + "\n")
         else:
             lines.insert(idx, content + "\n")
-            
-        if not backup_file(path):
-            return f"Error: Failed to backup {path}. Insertion aborted for safety."
             
         with open(path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
@@ -262,9 +210,6 @@ def search_replace(path: str, search_block: str, replace_block: str) -> str:
         
         new_lines = lines[:match_start] + replace_block.splitlines() + lines[match_start + len(search_lines):]
         
-        if not backup_file(path):
-            return f"Error: Failed to backup {path}. Modification aborted for safety."
-            
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write("\n".join(new_lines) + "\n")
             

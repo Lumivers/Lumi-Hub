@@ -18,7 +18,6 @@ import '../models/message.dart';
 import '../services/app_settings.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/live2d_view.dart';
 import '../widgets/message_share_card_dialog.dart';
 import '../widgets/trace_timeline_widget.dart';
 import 'components/approval_dialog.dart';
@@ -45,7 +44,6 @@ class _ChatScreenState extends State<ChatScreen> {
   VoidCallback? _wsListener;
 
   bool _showSidebar = true;
-  bool _showLive2dPanel = false;
   bool _loadingOlder = false;
   bool _pendingInitialBottom = true;
   bool _bottomJumpScheduled = false;
@@ -899,8 +897,6 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             },
             isSidebarOpen: isCompact ? false : _showSidebar,
-            onToggleLive2d: () => setState(() => _showLive2dPanel = !_showLive2dPanel),
-            isLive2dOpen: _showLive2dPanel,
           ),
         ),
         Divider(height: 1, color: colors.divider),
@@ -1109,92 +1105,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 Expanded(child: chatMain),
-                if (_showLive2dPanel) ...[
-                  VerticalDivider(width: 1, color: colors.divider),
-                  _Live2dSidebarStage(
-                    colors: colors,
-                    ws: ws,
-                    onClose: () => setState(() => _showLive2dPanel = false),
-                  ),
-                ],
               ],
             ),
-    );
-  }
-}
-
-// ─── 右侧 Live2D 嵌入展示舞台 ──────────────────────────────────────────────────
-
-class _Live2dSidebarStage extends StatelessWidget {
-  final LumiColors colors;
-  final WsService ws;
-  final VoidCallback onClose;
-
-  const _Live2dSidebarStage({
-    required this.colors,
-    required this.ws,
-    required this.onClose,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final activePersona = ws.activePersonaId.isNotEmpty ? ws.activePersonaId : 'Lumi AI';
-
-    return Container(
-      width: 320,
-      color: colors.sidebar,
-      child: Column(
-        children: [
-          // 顶部小标题栏
-          Container(
-            height: 56,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            alignment: Alignment.centerLeft,
-            child: Row(
-              children: [
-                Icon(Icons.face_retouching_natural, size: 20, color: colors.accent),
-                const SizedBox(width: 8),
-                Text(
-                  activePersona,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: '收起角色展台',
-                  color: colors.subtext,
-                  onPressed: onClose,
-                ),
-              ],
-            ),
-          ),
-          Divider(height: 1, color: colors.divider),
-
-          // Live2D 交互展示区
-          const Expanded(
-            child: Live2dView(),
-          ),
-          Divider(height: 1, color: colors.divider),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.mouse, size: 14, color: colors.subtext),
-                const SizedBox(width: 6),
-                Text(
-                  '鼠标移动跟随视线 · 点击角色互动',
-                  style: TextStyle(fontSize: 11, color: colors.subtext),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

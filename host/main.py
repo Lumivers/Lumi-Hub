@@ -296,7 +296,7 @@ class LumiHubApp(
 
         @registry.register(
             name="delete_file",
-            description="【高危操作】删除本地指定路径的文件。操作前会自动备份原文件到 .Lumi_cache。",
+            description="【高危操作】删除本地指定路径的文件。",
             parameters={
                 "path": {"type": "string", "description": "文件的结构完整路径"},
             },
