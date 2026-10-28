@@ -233,11 +233,11 @@ class LumiHubApp(
 
         @registry.register(
             name="read_file",
-            description="读取本地指定路径文件的内容。支持分页读取。输出中的 Lx: 前缀是行号参考，不是文件内容。",
+            description="Read file contents from the workspace. Supports line range pagination. Output line prefixes (Lx:) are 1-based line markers for reference, not part of the file content.",
             parameters={
-                "path": {"type": "string", "description": "文件的结构完整路径"},
-                "start_line": {"type": "integer", "description": "起始行号，默认为 1", "default": 1},
-                "end_line": {"type": "integer", "description": "结束行号（包左不包右），不填则读取到末尾"},
+                "path": {"type": "string", "description": "Absolute or workspace-relative path of the file to read"},
+                "start_line": {"type": "integer", "description": "Start line number (1-based, inclusive), defaults to 1", "default": 1},
+                "end_line": {"type": "integer", "description": "End line number (inclusive). Omit to read until the end of the file"},
             },
         )
         def read_file(path: str, start_line: int = 1, end_line: int = None) -> str:
@@ -245,37 +245,33 @@ class LumiHubApp(
 
         @registry.register(
             name="search_replace",
-            description="【最推荐】IDE 风格的搜索替换。提供待修改的唯一原始代码块(SEARCH)和替换后的代码块(REPLACE)。",
+            description="IDE-style search and replace. Replaces an exact unique search block with a replacement block. Automatically tracked and protected by Git versioning.",
             parameters={
-                "path": {"type": "string", "description": "文件完整路径"},
-                "search_block": {"type": "string", "description": "待替换的原始代码片段（必须唯一，包含正确缩进）"},
-                "replace_block": {"type": "string", "description": "替换后的新代码片段"},
+                "path": {"type": "string", "description": "Path of the file to edit"},
+                "search_block": {"type": "string", "description": "Exact multi-line block to be replaced (must be unique within the file, including exact indentation)"},
+                "replace_block": {"type": "string", "description": "New replacement content block"},
             },
-            requires_auth=True,
-            auth_action_type="FILE_MODIFY",
         )
         def search_replace(path: str, search_block: str, replace_block: str) -> str:
             return native_search_replace(path, search_block, replace_block)
 
         @registry.register(
             name="insert_content",
-            description="【推荐】在文件的指定行号位置插入新内容。",
+            description="Insert content at a specific line number (1-based). Automatically tracked and protected by Git versioning.",
             parameters={
-                "path": {"type": "string", "description": "文件的结构完整路径"},
-                "line_number": {"type": "integer", "description": "要插入的目标行号（1-indexed）"},
-                "content": {"type": "string", "description": "要插入的文本内容"},
+                "path": {"type": "string", "description": "Path of the file to modify"},
+                "line_number": {"type": "integer", "description": "Target line index (1-based) where content will be inserted"},
+                "content": {"type": "string", "description": "Text content to insert"},
             },
-            requires_auth=True,
-            auth_action_type="FILE_MODIFY",
         )
         def insert_content(path: str, line_number: int, content: str) -> str:
             return native_insert_content(path, line_number, content)
 
         @registry.register(
             name="list_dir",
-            description="列出本地指定目录下的文件和文件夹。",
+            description="List entries (files and directories) in the specified folder.",
             parameters={
-                "path": {"type": "string", "description": "文件夹的结构完整路径"},
+                "path": {"type": "string", "description": "Path of the directory to list"},
             },
         )
         def list_dir(path: str) -> str:
@@ -283,22 +279,20 @@ class LumiHubApp(
 
         @registry.register(
             name="write_file",
-            description="【高危操作】将内容写入到本地文件中。操作前会自动备份原文件。如果文件不存在则新建。",
+            description="Create a new file or overwrite an entire small file. For existing codebase files, DO NOT overwrite completely; use replace_content or search_replace for surgical modifications.",
             parameters={
-                "path": {"type": "string", "description": "文件的结构完整路径"},
-                "content": {"type": "string", "description": "要写入的完整内容"},
+                "path": {"type": "string", "description": "Target file path"},
+                "content": {"type": "string", "description": "Full file content to write"},
             },
-            requires_auth=True,
-            auth_action_type="FILE_MODIFY",
         )
         def write_file(path: str, content: str) -> str:
             return native_write_file(path, content)
 
         @registry.register(
             name="delete_file",
-            description="【高危操作】删除本地指定路径的文件。",
+            description="Delete a file from the workspace. High-risk operation requiring explicit user approval.",
             parameters={
-                "path": {"type": "string", "description": "文件的结构完整路径"},
+                "path": {"type": "string", "description": "Path of the file to delete"},
             },
             requires_auth=True,
             auth_action_type="FILE_DELETE",
@@ -308,23 +302,21 @@ class LumiHubApp(
 
         @registry.register(
             name="replace_content",
-            description="【推荐】精确修改文件内容。仅当您只需修改文件的一小部分时使用。必须提供唯一的 old_content。",
+            description="Surgically replace a unique snippet in a file. Must provide the unique old_content. Automatically tracked and protected by Git versioning.",
             parameters={
-                "path": {"type": "string", "description": "文件的结构完整路径"},
-                "old_content": {"type": "string", "description": "要被替换的原始代码片段（必须唯一）"},
-                "new_content": {"type": "string", "description": "替换后的新代码片段"},
+                "path": {"type": "string", "description": "Path of the file to edit"},
+                "old_content": {"type": "string", "description": "Exact text snippet to be replaced (must match exactly once in the file)"},
+                "new_content": {"type": "string", "description": "New text snippet to insert in its place"},
             },
-            requires_auth=True,
-            auth_action_type="FILE_MODIFY",
         )
         def replace_content(path: str, old_content: str, new_content: str) -> str:
             return native_replace_content(path, old_content, new_content)
 
         @registry.register(
             name="get_file_size",
-            description="获取文件的字节数大小。",
+            description="Get the size of a file in bytes.",
             parameters={
-                "path": {"type": "string", "description": "文件的结构完整路径"},
+                "path": {"type": "string", "description": "Path of the file"},
             },
         )
         def get_file_size(path: str) -> str:
@@ -332,11 +324,11 @@ class LumiHubApp(
 
         @registry.register(
             name="run_command",
-            description="【高危操作】在本地系统执行 Shell 命令行（如 git, python, flutter, cmake, pytest, ls 等）。捕获 exit code、stdout 和 stderr。",
+            description="Execute a shell command on the host system. High-risk operation requiring explicit user approval via client popup. Captures exit code, stdout, and stderr.",
             parameters={
-                "command": {"type": "string", "description": "要执行的 Shell 命令行语句"},
-                "cwd": {"type": "string", "description": "执行命令的工作目录绝对路径（可选，默认为当前工程根目录）", "default": ""},
-                "timeout": {"type": "integer", "description": "命令超时秒数，默认为 60 秒", "default": 60},
+                "command": {"type": "string", "description": "Shell command line to execute"},
+                "cwd": {"type": "string", "description": "Working directory for the command (defaults to workspace root)", "default": ""},
+                "timeout": {"type": "integer", "description": "Timeout in seconds, defaults to 60", "default": 60},
             },
             requires_auth=True,
             auth_action_type="COMMAND_RUN",
@@ -346,11 +338,11 @@ class LumiHubApp(
 
         @registry.register(
             name="search_workspace",
-            description="在工作区内递归搜索匹配名称或通配符模式（如 *.dart 或 *message*）的文件与目录列表。",
+            description="Search files and directories matching a glob pattern (e.g. '*.dart', '*test*') recursively across the workspace.",
             parameters={
-                "pattern": {"type": "string", "description": "要搜索的文件名关键词或通配符模式（如 *agent*、*.py、*.dart）"},
-                "workspace_dir": {"type": "string", "description": "搜索根目录（可选，默认当前工程工作区）", "default": ""},
-                "max_results": {"type": "integer", "description": "返回的最大结果数量，默认为 50", "default": 50},
+                "pattern": {"type": "string", "description": "File name keyword or glob pattern (e.g. '*.py', '*controller*')"},
+                "workspace_dir": {"type": "string", "description": "Root directory to search (defaults to workspace root)", "default": ""},
+                "max_results": {"type": "integer", "description": "Maximum number of results to return (default 50)", "default": 50},
             },
         )
         def search_workspace(pattern: str, workspace_dir: str = "", max_results: int = 50) -> str:
@@ -358,14 +350,14 @@ class LumiHubApp(
 
         @registry.register(
             name="grep_code",
-            description="在代码库中快速检索文本或正则表达式匹配项。极速定位代码所在文件和行号，无需盲目遍历目录。",
+            description="Fast regex or literal text search across files in the workspace. Quickly locates matching lines and file paths without traversing manually.",
             parameters={
-                "query": {"type": "string", "description": "要检索的文本关键词或正则表达式"},
-                "path": {"type": "string", "description": "搜索路径（文件或目录，默认当前工程工作区）", "default": ""},
-                "is_regex": {"type": "boolean", "description": "是否启用正则表达式匹配，默认为 false", "default": False},
-                "case_sensitive": {"type": "boolean", "description": "是否区分大小写，默认为 false", "default": False},
-                "max_results": {"type": "integer", "description": "最多匹配行数，默认为 50", "default": 50},
-                "file_extension": {"type": "string", "description": "限定文件扩展名（如 .dart 或 .py），可选", "default": ""},
+                "query": {"type": "string", "description": "Text substring or regex pattern to search for"},
+                "path": {"type": "string", "description": "Target file or directory path (defaults to workspace root)", "default": ""},
+                "is_regex": {"type": "boolean", "description": "Whether query is a regular expression, defaults to false", "default": False},
+                "case_sensitive": {"type": "boolean", "description": "Whether search is case-sensitive, defaults to false", "default": False},
+                "max_results": {"type": "integer", "description": "Maximum number of matched lines, defaults to 50", "default": 50},
+                "file_extension": {"type": "string", "description": "Optional file extension filter (e.g. '.dart' or '.py')", "default": ""},
             },
         )
         def grep_code(query: str, path: str = "", is_regex: bool = False, case_sensitive: bool = False, max_results: int = 50, file_extension: str = "") -> str:
@@ -373,11 +365,11 @@ class LumiHubApp(
 
         @registry.register(
             name="find_symbol",
-            description="在代码库中快速定位符号定义（类 class、函数 def/func、接口 interface、结构体 struct、枚举 enum 等）。",
+            description="Quickly locate code symbol definitions (classes, functions, methods, structs, interfaces, enums) across the workspace.",
             parameters={
-                "symbol": {"type": "string", "description": "待查找定义的符号名称（如 AgentLoop、ChatMessage、login）"},
-                "path": {"type": "string", "description": "搜索路径（默认当前工程工作区）", "default": ""},
-                "max_results": {"type": "integer", "description": "最多匹配结果数，默认为 30", "default": 30},
+                "symbol": {"type": "string", "description": "Name of the symbol to locate (e.g. 'AgentLoop', 'ChatMessage', 'main')"},
+                "path": {"type": "string", "description": "Target search directory (defaults to workspace root)", "default": ""},
+                "max_results": {"type": "integer", "description": "Maximum number of matches to return (default 30)", "default": 30},
             },
         )
         def find_symbol(symbol: str, path: str = "", max_results: int = 30) -> str:
@@ -386,25 +378,25 @@ class LumiHubApp(
         @registry.register(
             name="ask_user_question",
             description=(
-                "向用户提出一个或多个单选/多选题（例如架构决策、方案选择、需求澄清、高危操作确认）。"
-                "客户端会弹出交互式问答卡片并暂停等待用户选择。首选建议项放在选项第一位，并追加 '(Recommended)' 标识。"
+                "Ask the user one or more multiple-choice questions to resolve architectural decisions, clarify requirements, or obtain confirmation. "
+                "Suspends execution and presents an interactive dialog on the client. Put the recommended choice first with '(Recommended)' appended."
             ),
             parameters={
                 "questions": {
                     "type": "array",
-                    "description": "问题列表（至少包含 1 个问题）",
+                    "description": "List of questions to present to the user",
                     "items": {
                         "type": "object",
                         "required": ["question", "options"],
                         "properties": {
-                            "id": {"type": "string", "description": "问题唯一标识，如 q1, arch_choice 等"},
-                            "question": {"type": "string", "description": "问题的具体文案内容"},
+                            "id": {"type": "string", "description": "Unique identifier for the question, e.g. q1, arch_choice"},
+                            "question": {"type": "string", "description": "Question text presented to the user"},
                             "options": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "候选选项列表，如 ['(Recommended) 选项A', '选项B']",
+                                "description": "Candidate option strings, e.g. ['(Recommended) Option A', 'Option B']",
                             },
-                            "is_multi_select": {"type": "boolean", "description": "是否支持多选，默认为 false", "default": False},
+                            "is_multi_select": {"type": "boolean", "description": "Whether multiple selections are allowed, defaults to false", "default": False},
                         },
                     },
                 },

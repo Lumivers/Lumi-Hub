@@ -165,7 +165,12 @@ class ToolRegistry:
                     diff_preview=json.dumps(arguments, indent=2, ensure_ascii=False)[:500],
                 )
                 if not approved:
-                    return "Error: User rejected the tool execution."
+                    target_info = arguments.get("command") or arguments.get("cmd") or arguments.get("path") or name
+                    return (
+                        f"Error: User rejected the execution of {name} ('{target_info}'). "
+                        "The operation was blocked. Do not repeat this exact call; "
+                        "choose a non-destructive alternative or conclude the task."
+                    )
 
             try:
                 # 调用函数

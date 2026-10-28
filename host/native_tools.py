@@ -139,11 +139,11 @@ def replace_content(path: str, old_content: str, new_content: str) -> str:
             text = f.read()
         
         if old_content not in text:
-            return f"Error: Could not find the specified content to replace in {path}."
+            return f"Error: Could not find the specified old_content in {path}. Please call read_file to inspect the exact line content and indentation before retrying."
         
         count = text.count(old_content)
         if count > 1:
-            return f"Error: Found {count} occurrences of the target content. Please provide a more unique snippet to replace."
+            return f"Error: Found {count} occurrences of old_content in {path}. The old_content must be unique. Please include more surrounding lines of context to make it unambiguous."
         
         updated_text = text.replace(old_content, new_content)
         

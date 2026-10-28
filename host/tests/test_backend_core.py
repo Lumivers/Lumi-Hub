@@ -575,6 +575,69 @@ class TestUserQuestionTool(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data.get("status"), "timeout")
 
 
+class TestUserApprovalAndRiskTiering(unittest.IsolatedAsyncioTestCase):
+    """测试人机审批 (User-Approval) 与风险分级机制。"""
+
+    async def test_approval_policy_yolo_and_never(self):
+        # 1. yolo / auto 策略：自动放行
+        loop_yolo = AgentLoop(
+            llm_provider=MockLLMProvider(),
+            tool_registry=MockToolRegistry(),
+            persona_system_prompt="You are Lumi.",
+            history_messages=[],
+            ws_server=None,
+            ws_session_id="ws-1",
+            user_id=1,
+            persona_id="default",
+            db=None,
+            approval_policy="yolo",
+        )
+        approved = await loop_yolo.wait_for_auth("COMMAND_RUN", "rm -rf /test", "删除测试")
+        self.assertTrue(approved)
+
+        # 2. never 策略：自动拒绝
+        loop_never = AgentLoop(
+            llm_provider=MockLLMProvider(),
+            tool_registry=MockToolRegistry(),
+            persona_system_prompt="You are Lumi.",
+            history_messages=[],
+            ws_server=None,
+            ws_session_id="ws-1",
+            user_id=1,
+            persona_id="default",
+            db=None,
+            approval_policy="never",
+        )
+        approved = await loop_never.wait_for_auth("COMMAND_RUN", "rm -rf /test", "删除测试")
+        self.assertFalse(approved)
+
+    async def test_tool_registry_rejection_feedback(self):
+        from host.tool_registry import ToolRegistry
+        registry = ToolRegistry()
+
+        @registry.register(
+            name="dangerous_command",
+            description="高危测试命令",
+            parameters={"cmd": {"type": "string"}},
+            requires_auth=True,
+            auth_action_type="COMMAND_RUN",
+        )
+        def dangerous_command(cmd: str):
+            return "executed"
+
+        async def reject_auth(**kwargs):
+            return False
+
+        res = await registry.execute(
+            name="dangerous_command",
+            arguments={"cmd": "rm -rf /"},
+            auth_callback=reject_auth,
+        )
+        self.assertIn("Error: User rejected the execution of dangerous_command", res)
+        self.assertIn("rm -rf /", res)
+        self.assertIn("The operation was blocked", res)
+
+
 if __name__ == "__main__":
     unittest.main()
 

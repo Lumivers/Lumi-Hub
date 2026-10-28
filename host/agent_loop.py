@@ -127,8 +127,8 @@ def get_workspace_summary(workspace_dir: str, max_depth: int = 2, max_entries: i
 
     return {
         "workspace_dir": workspace_dir,
-        "tech_stacks": ", ".join(tech_stacks) if tech_stacks else "通用项目 (General)",
-        "tree_skeleton": "\n".join(tree_lines) if tree_lines else "(空目录)"
+        "tech_stacks": ", ".join(tech_stacks) if tech_stacks else "General",
+        "tree_skeleton": "\n".join(tree_lines) if tree_lines else "(empty)"
     }
 
 
@@ -300,6 +300,7 @@ class AgentLoop:
         msg_id: str = "",
         session_id: str = "default",
         workspace_dir: str = "",
+        approval_policy: str = "ask",
     ):
         self.llm = llm_provider
         self.tools = tool_registry
@@ -317,6 +318,7 @@ class AgentLoop:
         self.msg_id = msg_id or str(uuid.uuid4())[:8]
         self.session_id = session_id
         self.workspace_dir = workspace_dir
+        self.approval_policy = approval_policy or os.environ.get("LUMI_APPROVAL_POLICY", "ask")
 
         # 任务 Trace 收集器
         self.trace_collector = TraceCollector(session_id=self.session_id, msg_id=self.msg_id)
@@ -681,13 +683,24 @@ class AgentLoop:
             if summary:
                 ws_text = (
                     "\n\n### WORKSPACE_CONTEXT ###\n"
-                    f"- 工作区根目录: {summary['workspace_dir']}\n"
-                    f"- 检测技术栈: {summary['tech_stacks']}\n"
-                    f"- 项目顶层骨架:\n{summary['tree_skeleton']}\n"
-                    "- 检索提示: 请优先使用 `search_workspace` 定位文件，`grep_code` 全文搜索代码，`find_symbol` 定位类与函数定义。\n"
+                    f"- Root directory: {summary['workspace_dir']}\n"
+                    f"- Tech stack: {summary['tech_stacks']}\n"
+                    f"- Directory skeleton:\n{summary['tree_skeleton']}\n"
+                    "- Navigation & Editing Rules:\n"
+                    "  1. Locate files and definitions using `search_workspace`, `grep_code`, and `find_symbol`. Inspect contents with `read_file`.\n"
+                    "  2. When modifying existing code, STRONGLY PREFER `replace_content` or `search_replace` for precise surgical updates. DO NOT use `write_file` to rewrite entire existing files unless creating a new file or completely replacing a small template.\n"
+                    "  3. Terminal command execution (`run_command`) and file deletion (`delete_file`) are high-risk operations requiring explicit human approval via client popups. Explain your intent before invoking them.\n"
+                    "  4. When facing architectural decisions, ambiguous requirements, or multiple viable approaches, invoke `ask_user_question` to present structured choices to the user.\n"
                     "###########################"
                 )
                 prompt += ws_text
+
+        # 语言遵循铁律：底层英文提示词，对用户始终输出用户所使用的语言（默认中文）
+        lang_rule = (
+            "\n\n### LANGUAGE_CONVENTION ###\n"
+            "Always converse and respond to the user in the language they used (default to Chinese)."
+        )
+        prompt += lang_rule
 
         if relevant_memories:
             mem_text = "\n[关于该用户的长期记忆与偏好]\n" + "\n".join(
@@ -917,9 +930,19 @@ class AgentLoop:
     ) -> bool:
         """向客户端发送 AUTH_REQUIRED 并等待 AUTH_RESPONSE。
 
-        原 lumi_event.py 中的审批逻辑，已迁移至此。
-        返回 True 表示已获批准，False 表示拒绝或超时。
+        参考 DeepSeek-Harness @deepseek-ai/dsh-user-approval:
+        - 策略 'yolo' / 'auto': 自动批准，不阻塞
+        - 策略 'never': 自动拒绝，不弹窗
+        - 策略 'ask' (默认): 向客户端弹窗审批，超时（60s）以安全方式拒绝 (Fail-Closed)
         """
+        if self.approval_policy in ("yolo", "auto"):
+            logger.info(f"[AgentLoop] 审批策略为 '{self.approval_policy}'，自动放行: {action_type} - {target_path}")
+            return True
+
+        if self.approval_policy == "never":
+            logger.info(f"[AgentLoop] 审批策略为 'never'，自动拒绝: {action_type} - {target_path}")
+            return False
+
         auth_msg_id = f"auth-{str(uuid.uuid4())[:8]}"
 
         auth_req = {
@@ -937,19 +960,23 @@ class AgentLoop:
                 "tool_name": tool_name,
                 "diff_preview": diff_preview,
                 "timeout_seconds": 60,
+                "session_id": self.session_id,
             },
         }
 
         logger.info(f"[AgentLoop] 已发送审批请求 ({action_type}): {target_path}")
-        await self.ws_server.send_to_client(self.ws_session_id, auth_req)
+        await self._send_event(auth_req)
 
-        # 异步等待审批响应
-        resp = await self.ws_server.wait_for_response(
-            self.ws_session_id, auth_msg_id, timeout=60
-        )
+        # 异步等待审批响应 (Fail-closed: 超时或客户端未连接则安全拒绝)
+        if self.ws_server and hasattr(self.ws_server, "wait_for_response"):
+            resp = await self.ws_server.wait_for_response(
+                self.ws_session_id, auth_msg_id, timeout=60
+            )
+        else:
+            resp = None
 
         if not resp:
-            logger.warning(f"[AgentLoop] 审批超时或无响应: {action_type}")
+            logger.warning(f"[AgentLoop] 审批超时或无响应，根据 Fail-closed 原则自动拒绝: {action_type}")
             return False
 
         payload = resp.get("payload", {})

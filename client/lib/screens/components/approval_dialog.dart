@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'dart:ui';
+import 'package:flutter/material.dart';
 
 class ApprovalDialog extends StatelessWidget {
   final Map<String, dynamic> authRequest;
@@ -13,32 +13,47 @@ class ApprovalDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 审批弹窗只负责展示请求上下文并回传 APPROVED/REJECTED。
     final payload = authRequest['payload'] as Map<String, dynamic>? ?? {};
-    final actionType = payload['action_type'] as String? ?? 'UNKNOWN';
+    final actionType = payload['action_type'] as String? ?? 'COMMAND_RUN';
     final targetPath = payload['target_path'] as String? ?? 'N/A';
     final description = payload['description'] as String? ?? '';
     final diffPreview = payload['diff_preview'] as String? ?? '';
+    final theme = Theme.of(context);
+
+    final isCommand = actionType == 'COMMAND_RUN';
+    final isDelete = actionType == 'FILE_DELETE';
+
+    final Color badgeColor = isDelete
+        ? Colors.redAccent
+        : (isCommand ? Colors.cyanAccent : Colors.amberAccent);
+    final IconData badgeIcon = isDelete
+        ? Icons.delete_forever_rounded
+        : (isCommand ? Icons.terminal_rounded : Icons.security_rounded);
+    final String titleText = isDelete
+        ? '物理删除确认 (File Delete)'
+        : (isCommand ? '终端命令执行审批 (Shell Command)' : '高危操作审批');
 
     return BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
       child: Dialog(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 500),
+          constraints: const BoxConstraints(maxWidth: 540),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
-            borderRadius: BorderRadius.circular(20),
+            color: theme.colorScheme.surface.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.2),
-              width: 1.5,
+              color: Colors.white.withValues(alpha: 0.15),
+              width: 1.2,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 30,
-                spreadRadius: 5,
+                color: Colors.black.withValues(alpha: 0.4),
+                blurRadius: 36,
+                spreadRadius: 4,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
@@ -48,101 +63,146 @@ class ApprovalDialog extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 顶部标题
                 Row(
                   children: [
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.amber.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(12),
+                        color: badgeColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: badgeColor.withValues(alpha: 0.3),
+                          width: 1,
+                        ),
                       ),
-                      child: const Icon(Icons.security, color: Colors.amber),
+                      child: Icon(badgeIcon, color: badgeColor, size: 24),
                     ),
                     const SizedBox(width: 16),
-                    const Text(
-                      '高危操作审批',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            titleText,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '单次授权确认 · 超时 60 秒将自动安全拒绝 (Fail-Closed)',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.grey,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
-                _buildInfoRow('动作类型', actionType, Colors.blue),
-                const SizedBox(height: 12),
-                _buildInfoRow('目标路径', targetPath, Colors.green),
-                const SizedBox(height: 16),
-                const Text(
-                  '描述:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey,
-                  ),
+                const SizedBox(height: 20),
+
+                // 目标路径或命令
+                _buildInfoRow(
+                  isCommand ? '命令行' : '目标路径',
+                  targetPath,
+                  badgeColor,
+                  isCode: isCommand,
                 ),
-                const SizedBox(height: 4),
-                Text(description, style: const TextStyle(fontSize: 15)),
-                if (diffPreview.isNotEmpty) ...[
-                  // 仅展示预览文本，不做语义解释，避免误导审批决策。
-                  const SizedBox(height: 16),
-                  const Text(
-                    '变更预览:',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: Colors.grey,
-                    ),
+                const SizedBox(height: 12),
+
+                // 描述信息
+                if (description.isNotEmpty) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(
+                        width: 70,
+                        child: Text(
+                          '说明:',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontWeight: FontWeight.w500,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          description,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
+                ],
+
+                // 终端命令或 Diff 预览区
+                if (diffPreview.isNotEmpty) ...[
+                  const SizedBox(height: 16),
                   Container(
                     width: double.infinity,
-                    constraints: const BoxConstraints(maxHeight: 200),
+                    constraints: const BoxConstraints(maxHeight: 180),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.black.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        width: 1,
+                      ),
                     ),
                     child: SingleChildScrollView(
-                      child: Text(
+                      child: SelectableText(
                         diffPreview,
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 12,
-                          color: Colors.greenAccent,
+                          color: Color(0xFF68D391), // light green monospace
+                          height: 1.4,
                         ),
                       ),
                     ),
                   ),
                 ],
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
+
+                // 底部按钮
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    TextButton(
+                    OutlinedButton(
                       onPressed: () => onDecision('REJECTED'),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 16,
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
                         ),
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
                         foregroundColor: Colors.grey,
                       ),
-                      child: const Text('拒绝'),
+                      child: const Text('拒绝 (Reject)'),
                     ),
                     const SizedBox(width: 12),
-                    ElevatedButton(
+                    FilledButton(
                       onPressed: () => onDecision('APPROVED'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueAccent,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: isDelete ? Colors.redAccent : theme.colorScheme.primary,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 32,
-                          vertical: 16,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      child: const Text('批准执行'),
+                      child: const Text(
+                        '批准执行 (Allow Once)',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ],
                 ),
@@ -154,32 +214,36 @@ class ApprovalDialog extends StatelessWidget {
     );
   }
 
-  Widget _buildInfoRow(String label, String value, Color color) {
+  Widget _buildInfoRow(String label, String value, Color color, {bool isCode = false}) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 80,
+          width: 70,
           child: Text(
             label,
             style: const TextStyle(
               color: Colors.grey,
               fontWeight: FontWeight.w500,
+              fontSize: 13,
             ),
           ),
         ),
         Expanded(
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withValues(alpha: 0.25), width: 0.8),
             ),
-            child: Text(
-              value,
+            child: SelectableText(
+              isCode ? '\$ $value' : value,
               style: TextStyle(
                 color: color,
-                fontWeight: FontWeight.bold,
-                overflow: TextOverflow.ellipsis,
+                fontFamily: isCode ? 'monospace' : null,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
               ),
             ),
           ),
