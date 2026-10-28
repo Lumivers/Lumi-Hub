@@ -129,17 +129,29 @@ class ToolRegistry:
 
         return schemas
 
-    async def execute(self, name: str, arguments: dict, auth_callback: Optional[Callable] = None) -> str:
+    async def execute(
+        self,
+        name: str,
+        arguments: dict,
+        auth_callback: Optional[Callable] = None,
+        user_question_callback: Optional[Callable] = None,
+    ) -> str:
         """执行工具调用。
 
         Args:
             name: 工具名称
             arguments: 工具参数
             auth_callback: 审批回调函数 (action_type, target_path, description, tool_name, diff_preview) -> bool
+            user_question_callback: 交互式问答回调函数 (questions: list[dict]) -> str
 
         Returns:
             工具执行结果的字符串
         """
+        # 特殊交互工具：ask_user_question (问答卡片挂起与唤醒)
+        if name == "ask_user_question" and user_question_callback:
+            questions = arguments.get("questions", [])
+            return await user_question_callback(questions)
+
         # 1. 查找 native tool
         tool = self._tools.get(name)
         if tool:

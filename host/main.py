@@ -383,6 +383,44 @@ class LumiHubApp(
         def find_symbol(symbol: str, path: str = "", max_results: int = 30) -> str:
             return native_find_symbol(symbol=symbol, path=path or None, max_results=max_results)
 
+        @registry.register(
+            name="ask_user_question",
+            description=(
+                "向用户提出一个或多个单选/多选题（例如架构决策、方案选择、需求澄清、高危操作确认）。"
+                "客户端会弹出交互式问答卡片并暂停等待用户选择。首选建议项放在选项第一位，并追加 '(Recommended)' 标识。"
+            ),
+            parameters={
+                "questions": {
+                    "type": "array",
+                    "description": "问题列表（至少包含 1 个问题）",
+                    "items": {
+                        "type": "object",
+                        "required": ["question", "options"],
+                        "properties": {
+                            "id": {"type": "string", "description": "问题唯一标识，如 q1, arch_choice 等"},
+                            "question": {"type": "string", "description": "问题的具体文案内容"},
+                            "options": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "候选选项列表，如 ['(Recommended) 选项A', '选项B']",
+                            },
+                            "is_multi_select": {"type": "boolean", "description": "是否支持多选，默认为 false", "default": False},
+                        },
+                    },
+                },
+            },
+        )
+        def ask_user_question(questions: list[dict] = None) -> str:
+            return json.dumps({
+                "answers": [
+                    {
+                        "id": q.get("id", f"q{i+1}"),
+                        "selected": [q.get("options", ["(Recommended) 确认"])[0]] if q.get("options") else ["确认"]
+                    }
+                    for i, q in enumerate(questions or [])
+                ]
+            }, ensure_ascii=False)
+
         logger.info(f"[Lumi-Hub] 已注册 {len(self.tool_registry.list_tools())} 个原生工具")
 
     async def _build_agent_prompt(self):

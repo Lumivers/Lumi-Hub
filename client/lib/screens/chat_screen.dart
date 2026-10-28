@@ -21,6 +21,7 @@ import '../theme/app_theme.dart';
 import '../widgets/message_share_card_dialog.dart';
 import '../widgets/trace_timeline_widget.dart';
 import 'components/approval_dialog.dart';
+import 'components/user_question_dialog.dart';
 import 'extension_center_dialog.dart';
 import 'settings_hub_dialog.dart';
 
@@ -49,6 +50,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _bottomJumpScheduled = false;
   int _lastMessageCount = 0;
   StreamSubscription? _authSubscription;
+  StreamSubscription? _userQuestionSubscription;
   StreamSubscription<Map<String, dynamic>>? _voiceSubscription;
   String? _pendingFileName;
   bool _isUploadingAttachment = false;
@@ -76,6 +78,7 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ws = context.read<WsService>();
       _authSubscription = ws.authRequests.listen(_handleAuthRequest);
+      _userQuestionSubscription = ws.userQuestions.listen(_handleUserQuestion);
       _voiceSubscription = ws.voiceEvents.listen(_handleVoiceEvent);
       _lastMessageCount = ws.messages.length;
       _lastGeneratingState = ws.isGenerating;
@@ -136,6 +139,30 @@ class _ChatScreenState extends State<ChatScreen> {
         onDecision: (decision) {
           final ws = context.read<WsService>();
           ws.sendAuthResponse(request['message_id'], decision);
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
+
+  void _handleUserQuestion(Map<String, dynamic> request) {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => UserQuestionDialog(
+        request: request,
+        onSubmit: (answers) {
+          final ws = context.read<WsService>();
+          final msgId = (request['message_id'] as String?) ?? '';
+          ws.sendUserQuestionResponse(msgId, answers);
+          Navigator.pop(context);
+        },
+        onCancel: () {
+          final ws = context.read<WsService>();
+          final msgId = (request['message_id'] as String?) ?? '';
+          ws.sendUserQuestionResponse(msgId, []);
           Navigator.pop(context);
         },
       ),
@@ -273,6 +300,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _scroll.removeListener(_onScrollMaybeLoadOlder);
     _authSubscription?.cancel();
+    _userQuestionSubscription?.cancel();
     _voiceSubscription?.cancel();
     _input.dispose();
     _scroll.dispose();

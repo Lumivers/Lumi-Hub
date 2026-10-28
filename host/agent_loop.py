@@ -474,6 +474,7 @@ class AgentLoop:
                             name=tool_name,
                             arguments=tool_args,
                             auth_callback=self.wait_for_auth,
+                            user_question_callback=self.wait_for_user_question,
                         )
 
                         # 3. 捕获 exit code (针对 run_command 等工具)
@@ -960,3 +961,49 @@ class AgentLoop:
         else:
             logger.warning(f"[AgentLoop] 用户拒绝了操作: {action_type}")
             return False
+
+    async def wait_for_user_question(self, questions: list[dict], timeout: int = 180) -> str:
+        """向客户端发送 ASK_USER_QUESTION 并挂起等待 USER_QUESTION_RESPONSE。
+
+        参考 DeepSeek-Harness @deepseek-ai/dsh-tool-ask-user:
+        向客户端推送结构化问答卡片（单选/多选/推荐项）。
+        收到用户选择后唤醒 Agent 循环，将紧凑的 JSON 答案传回给模型。
+        """
+        question_msg_id = f"q-{str(uuid.uuid4())[:8]}"
+
+        req_msg = {
+            "message_id": question_msg_id,
+            "type": "ASK_USER_QUESTION",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "question_id": question_msg_id,
+                "questions": questions,
+                "timeout_seconds": timeout,
+                "session_id": self.session_id,
+            },
+        }
+
+        logger.info(f"[AgentLoop] 向客户端发送问答卡片 ({len(questions)} 道题目): {question_msg_id}")
+        await self._send_event(req_msg)
+
+        # 异步等待前端用户的勾选回答 (借用 ws_server.wait_for_response)
+        if self.ws_server and hasattr(self.ws_server, "wait_for_response"):
+            resp = await self.ws_server.wait_for_response(
+                self.ws_session_id, question_msg_id, timeout=timeout
+            )
+        else:
+            resp = None
+
+        if not resp:
+            logger.warning(f"[AgentLoop] 用户问答卡片等待超时或无应答 (id={question_msg_id})")
+            return json.dumps({
+                "status": "timeout",
+                "message": "User did not answer within the timeout period. Please proceed with reasonable defaults or ask again."
+            }, ensure_ascii=False)
+
+        payload = resp.get("payload", {})
+        answers = payload.get("answers", [])
+        logger.info(f"[AgentLoop] 收到用户问答卡片选择: {answers}")
+        return json.dumps({"answers": answers}, ensure_ascii=False)

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import json
 import unittest
 
 # 确保项目根目录在 sys.path 中
@@ -33,7 +34,9 @@ class MockToolRegistry:
     async def get_all_schemas_with_mcp(self):
         return []
 
-    async def execute(self, name, arguments, auth_callback=None):
+    async def execute(self, name, arguments, auth_callback=None, user_question_callback=None):
+        if name == "ask_user_question" and user_question_callback:
+            return await user_question_callback(arguments.get("questions", []))
         return f"Executed {name}"
 
 
@@ -443,7 +446,7 @@ class TestRepeatToolWatchdog(unittest.IsolatedAsyncioTestCase):
             async def get_all_schemas_with_mcp(self):
                 return [{"type": "function", "function": {"name": "dummy_tool", "parameters": {}}}]
 
-            async def execute(self, name, arguments, auth_callback=None):
+            async def execute(self, name, arguments, **kwargs):
                 return "status: pending"
 
         mock_llm = RepeatToolMockLLM()
@@ -478,6 +481,98 @@ class TestRepeatToolWatchdog(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("[Repeat Tool Call Reminder]", tool_results[1]["content"])
         self.assertIn("[Repeat Tool Call Reminder]", tool_results[2]["content"])
         self.assertIn("repeating the exact same tool call", tool_results[2]["content"])
+
+
+class TestUserQuestionTool(unittest.IsolatedAsyncioTestCase):
+    """测试交互式问答卡片 (ask_user_question) 挂起与应答流程。"""
+
+    async def test_tool_registry_ask_user_question_callback(self):
+        from host.tool_registry import ToolRegistry
+        registry = ToolRegistry()
+
+        questions = [
+            {
+                "id": "q1",
+                "question": "网络拓扑？",
+                "options": ["(Recommended) 局域网", "公网"],
+                "is_multi_select": False,
+            }
+        ]
+
+        async def mock_callback(qs):
+            return json.dumps({"answers": [{"id": qs[0]["id"], "selected": ["(Recommended) 局域网"]}]})
+
+        res = await registry.execute(
+            name="ask_user_question",
+            arguments={"questions": questions},
+            user_question_callback=mock_callback,
+        )
+        data = json.loads(res)
+        self.assertIn("answers", data)
+        self.assertEqual(data["answers"][0]["selected"], ["(Recommended) 局域网"])
+
+    async def test_agent_loop_wait_for_user_question_success(self):
+        class MockWSServer:
+            def __init__(self):
+                self.sent_messages = []
+
+            async def wait_for_response(self, session_id, message_id, timeout=180):
+                return {
+                    "message_id": message_id,
+                    "payload": {
+                        "answers": [{"id": "q1", "selected": ["局域网直连"]}],
+                    },
+                }
+
+        ws_mock = MockWSServer()
+        loop = AgentLoop(
+            llm_provider=MockLLMProvider(),
+            tool_registry=MockToolRegistry(),
+            persona_system_prompt="You are Lumi.",
+            history_messages=[],
+            ws_server=ws_mock,
+            ws_session_id="ws-test",
+            user_id=1,
+            persona_id="default",
+            db=None,
+        )
+        sent = []
+        async def dummy_send_event(msg):
+            sent.append(msg)
+        loop._send_event = dummy_send_event
+
+        res = await loop.wait_for_user_question(
+            questions=[{"id": "q1", "question": "请选择网络", "options": ["局域网直连"]}]
+        )
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["type"], "ASK_USER_QUESTION")
+        data = json.loads(res)
+        self.assertEqual(data["answers"][0]["selected"], ["局域网直连"])
+
+    async def test_agent_loop_wait_for_user_question_timeout(self):
+        class MockWSServerTimeout:
+            async def wait_for_response(self, session_id, message_id, timeout=180):
+                return None
+
+        loop = AgentLoop(
+            llm_provider=MockLLMProvider(),
+            tool_registry=MockToolRegistry(),
+            persona_system_prompt="You are Lumi.",
+            history_messages=[],
+            ws_server=MockWSServerTimeout(),
+            ws_session_id="ws-test",
+            user_id=1,
+            persona_id="default",
+            db=None,
+        )
+        loop._send_event = lambda msg: asyncio.sleep(0)
+
+        res = await loop.wait_for_user_question(
+            questions=[{"id": "q1", "question": "请选择网络", "options": ["局域网直连"]}],
+            timeout=1,
+        )
+        data = json.loads(res)
+        self.assertEqual(data.get("status"), "timeout")
 
 
 if __name__ == "__main__":

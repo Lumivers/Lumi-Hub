@@ -95,6 +95,12 @@ class WsService extends ChangeNotifier {
   Stream<Map<String, dynamic>> get authRequests =>
       _authRequestController.stream;
 
+  // 用户交互式问答卡片流 (ask_user_question)
+  final _userQuestionController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get userQuestions =>
+      _userQuestionController.stream;
+
   // MCP 配置流
   final _mcpConfigController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -464,6 +470,9 @@ class WsService extends ChangeNotifier {
         case 'AUTH_REQUIRED':
           _handleAuthRequired(data);
           break;
+        case 'ASK_USER_QUESTION':
+          _handleAskUserQuestion(data);
+          break;
         case 'HISTORY_RESPONSE':
           _handleHistoryResponse(data);
           break;
@@ -788,6 +797,11 @@ class WsService extends ChangeNotifier {
     _authRequestController.add(data);
   }
 
+  void _handleAskUserQuestion(Map<String, dynamic> data) {
+    debugPrint('[WS] 收到用户问答卡片请求: ${data['message_id']}');
+    _userQuestionController.add(data);
+  }
+
   void _handleHistoryResponse(Map<String, dynamic> data) {
     final msgId = data['message_id'] as String?;
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
@@ -970,6 +984,18 @@ class WsService extends ChangeNotifier {
       'target': 'host',
       'timestamp': DateTime.now().millisecondsSinceEpoch,
       'payload': {'task_id': taskId, 'decision': decision, 'reason': ''},
+    });
+  }
+
+  void sendUserQuestionResponse(String messageId, List<Map<String, dynamic>> answers) {
+    if (_status != WsStatus.connected) return;
+    _send({
+      'message_id': messageId, // 必须回传相同的 message_id 作为挂起 Future 的唤醒键
+      'type': 'USER_QUESTION_RESPONSE',
+      'source': 'client',
+      'target': 'host',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': {'answers': answers},
     });
   }
 
@@ -1670,6 +1696,7 @@ class WsService extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _authRequestController.close();
+    _userQuestionController.close();
     _mcpConfigController.close();
     _voiceEventController.close();
     _personaController.close();
