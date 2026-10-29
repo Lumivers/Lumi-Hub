@@ -45,9 +45,13 @@ class AnthropicProvider(BaseLLMProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        reasoning_effort: str = "high",
     ) -> AsyncGenerator[dict, None]:
         client = self._get_client()
-        use_model = model or self._default_model
+        use_model = (model or self._default_model).strip()
+        effort = (reasoning_effort or "high").lower()
+        if effort not in ("low", "medium", "high"):
+            effort = "high"
 
         # Anthropic 的 system prompt 是单独参数
         system_prompt = ""
@@ -70,12 +74,24 @@ class AnthropicProvider(BaseLLMProvider):
                     "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
                 })
 
+        budget_map = {"low": 2048, "medium": 8192, "high": 32768}
+        budget = budget_map.get(effort, 32768)
+
         kwargs = {
             "model": use_model,
             "messages": api_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
+            "stream": True,
         }
+
+        # Claude 3.7+ 显式支持 thinking
+        if "3-7" in use_model or "thinking" in use_model:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            kwargs["temperature"] = 1.0
+            kwargs["max_tokens"] = max(max_tokens, budget + 4096)
+        else:
+            kwargs["temperature"] = temperature
+            kwargs["max_tokens"] = max_tokens
+
         if system_prompt:
             kwargs["system"] = system_prompt
         if anthropic_tools:

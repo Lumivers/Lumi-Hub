@@ -1072,6 +1072,7 @@ class _ChatScreenState extends State<ChatScreen> {
               controller: _input,
               focusNode: _focusNode,
               colors: colors,
+              ws: ws,
               activePersonaId: ws.activePersonaId,
               onSend: () => _send(ws),
               onStop: () => ws.cancelCurrentGeneration(),

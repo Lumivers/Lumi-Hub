@@ -51,24 +51,52 @@ class OpenAIProvider(BaseLLMProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        reasoning_effort: str = "high",
     ) -> AsyncGenerator[dict, None]:
         client = self._get_client()
-        use_model = model or self._default_model
+        use_model = (model or self._default_model).strip()
+        effort = (reasoning_effort or "high").lower()
+        if effort not in ("low", "medium", "high"):
+            effort = "high"
+
+        is_o_series = use_model.startswith("o1") or use_model.startswith("o3")
+        is_reasoning_model = (
+            is_o_series
+            or "r1" in use_model.lower()
+            or "reason" in use_model.lower()
+            or "think" in use_model.lower()
+        )
 
         kwargs = {
             "model": use_model,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
             "stream": True,
         }
+
+        if is_o_series:
+            kwargs["reasoning_effort"] = effort
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["temperature"] = temperature
+            kwargs["max_tokens"] = max_tokens
+            if is_reasoning_model:
+                kwargs["reasoning_effort"] = effort
 
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
         try:
-            stream = await client.chat.completions.create(**kwargs)
+            try:
+                stream = await client.chat.completions.create(**kwargs)
+            except Exception as ex:
+                err_str = str(ex).lower()
+                # 若服务端不支持 reasoning_effort 关键字，自适应降级重试
+                if "reasoning_effort" in kwargs and ("reasoning_effort" in err_str or "extra" in err_str or "unrecognized" in err_str):
+                    kwargs.pop("reasoning_effort", None)
+                    stream = await client.chat.completions.create(**kwargs)
+                else:
+                    raise
 
             # 用于聚合分片的 tool_calls 缓冲区
             # OpenAI 的 tool_call 是分片的（index 字段标识），需要拼接

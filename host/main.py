@@ -125,6 +125,10 @@ class LumiHubApp(
         # 正在执行中的 AgentLoop (keyed by session_id and ws_session_id)
         self._active_agents: dict[str, AgentLoop] = {}
 
+        # 推理思考强度 (Reasoning Effort: low / medium / high, 默认 high)
+        _initial_cfg = self._load_llm_config()
+        self._reasoning_effort = _initial_cfg.get("reasoning_effort", "high")
+
         # WebSocket 消息路由表
         self._message_handlers: dict[
             str, Callable[[dict, str], Coroutine[Any, Any, None]]
@@ -155,6 +159,7 @@ class LumiHubApp(
             "LLM_CONFIG_GET": self._handle_llm_config_get,
             "LLM_CONFIG_SET": self._handle_llm_config_set,
             "LLM_SWITCH_MODEL": self._handle_llm_switch_model,
+            "LLM_SET_THINKING_LEVEL": self._handle_llm_set_thinking_level,
             "LLM_MODEL_SAVE": self._handle_llm_model_save,
             "LLM_MODEL_DELETE": self._handle_llm_model_delete,
             "LLM_TEST_CONNECTION": self._handle_llm_test_connection,
@@ -587,6 +592,9 @@ class LumiHubApp(
         if skill_name:
             skill_prompt = self.skill_manager.get_skill_prompt(skill_name, skill_params)
 
+        # 推理思考等级 (low / medium / high)
+        req_effort = payload.get("reasoning_effort") or self._reasoning_effort
+
         # 创建 AgentLoop 并执行
         agent = AgentLoop(
             llm_provider=self.llm,
@@ -605,6 +613,7 @@ class LumiHubApp(
             msg_id=msg_id,
             session_id=session_id,
             workspace_dir=workspace_path,
+            reasoning_effort=req_effort,
         )
 
         # 记录正在运行的 agent
@@ -810,6 +819,7 @@ class LumiHubApp(
         data["model"] = active_model.get("model", "")
         data["base_url"] = active_model.get("base_url", "")
         data["api_key"] = active_model.get("api_key", "")
+        data["reasoning_effort"] = data.get("reasoning_effort", "high")
         return data
 
     def _load_llm_config(self) -> dict:
@@ -880,6 +890,7 @@ class LumiHubApp(
             "payload": {
                 "status": "success",
                 "active_model_id": config.get("active_model_id", "default"),
+                "reasoning_effort": self._reasoning_effort,
                 "models": models_safe,
                 "config": {
                     "provider": config.get("provider", "openai"),
@@ -926,6 +937,7 @@ class LumiHubApp(
             "name": target.get("name", target.get("model", "")),
             "model": target.get("model", ""),
             "provider": target.get("provider", "openai"),
+            "reasoning_effort": self._reasoning_effort,
         }
         await self.ws_server.send_to_client(ws_session_id, {
             "message_id": msg_id,
@@ -934,6 +946,32 @@ class LumiHubApp(
             "target": "client",
             "timestamp": int(time.time() * 1000),
             "payload": sync_payload,
+        })
+
+    async def _handle_llm_set_thinking_level(self, message: dict, ws_session_id: str) -> None:
+        """设置思考/推理等级 (low / medium / high)。"""
+        msg_id = message.get("message_id", str(uuid.uuid4())[:8])
+        payload = message.get("payload", {})
+        level = str(payload.get("level", "high")).strip().lower()
+        if level not in ("low", "medium", "high"):
+            level = "high"
+
+        self._reasoning_effort = level
+        current = self._load_llm_config()
+        current["reasoning_effort"] = level
+        self._save_llm_config(current)
+
+        logger.info(f"[Lumi-Hub] 思考等级切换为: {level}")
+        await self.ws_server.send_to_client(ws_session_id, {
+            "message_id": msg_id,
+            "type": "LLM_SET_THINKING_LEVEL_RESPONSE",
+            "source": "host",
+            "target": "client",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "status": "success",
+                "reasoning_effort": level,
+            },
         })
 
     async def _handle_llm_model_save(self, message: dict, ws_session_id: str) -> None:

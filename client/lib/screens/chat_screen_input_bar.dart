@@ -4,6 +4,7 @@ class _InputBar extends StatefulWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final LumiColors colors;
+  final WsService ws;
   final String activePersonaId;
   final VoidCallback onSend;
   final VoidCallback? onStop;
@@ -16,6 +17,7 @@ class _InputBar extends StatefulWidget {
     required this.controller,
     required this.focusNode,
     required this.colors,
+    required this.ws,
     required this.activePersonaId,
     required this.onSend,
     this.onStop,
@@ -67,108 +69,328 @@ class _InputBarState extends State<_InputBar> {
     }
   }
 
+  String _formatReasoningEffort(String effort) {
+    switch (effort.toLowerCase()) {
+      case 'low':
+        return 'Low';
+      case 'medium':
+        return 'Medium';
+      case 'high':
+      default:
+        return 'High';
+    }
+  }
+
+  List<Widget> _buildMenuChildren(BuildContext context) {
+    final ws = widget.ws;
+    final colors = widget.colors;
+    final curEffort = _formatReasoningEffort(ws.reasoningEffort);
+    final submenuStyle = MenuStyle(
+      backgroundColor: WidgetStatePropertyAll(colors.inputBg),
+      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: colors.divider.withValues(alpha: 0.6)),
+        ),
+      ),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 4)),
+    );
+
+    final children = <Widget>[
+      // ── Model 标题 ──
+      Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+        child: Text(
+          'Model',
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+            color: colors.subtext,
+          ),
+        ),
+      ),
+    ];
+
+    for (final m in ws.configuredModels) {
+      final id = m['id'] as String? ?? '';
+      final name = (m['name'] as String?) ?? (m['model'] as String?) ?? '未命名';
+      final isCur = id == ws.activeModelId;
+
+      if (isCur) {
+        // 当前激活模型带二级飞出菜单 (Cascading Submenu): Low / Medium / High
+        children.add(
+          SubmenuButton(
+            menuStyle: submenuStyle,
+            menuChildren: [
+              for (final lvl in ['Low', 'Medium', 'High'])
+                MenuItemButton(
+                  onPressed: () => ws.setReasoningEffort(lvl.toLowerCase()),
+                  trailingIcon: ws.reasoningEffort == lvl.toLowerCase()
+                      ? Icon(Icons.check, size: 15, color: colors.subtext)
+                      : null,
+                  child: Text(
+                    lvl,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: ws.reasoningEffort == lvl.toLowerCase()
+                          ? FontWeight.w500
+                          : FontWeight.w400,
+                    ),
+                  ),
+                ),
+            ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 180),
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  curEffort,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w400,
+                    color: colors.subtext,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      } else {
+        children.add(
+          MenuItemButton(
+            onPressed: () => ws.switchModel(id),
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    children.add(
+      Divider(
+        height: 10,
+        thickness: 0.8,
+        color: colors.divider.withValues(alpha: 0.5),
+      ),
+    );
+
+    children.add(
+      MenuItemButton(
+        leadingIcon: Icon(Icons.speed_rounded, size: 15, color: colors.subtext),
+        onPressed: () {
+          if (mounted) {
+            SettingsHubDialog.show(context, ws: ws, colors: colors, initialTab: 1);
+          }
+        },
+        child: Text(
+          '管理模型配置...',
+          style: TextStyle(fontSize: 12, color: colors.subtext),
+        ),
+      ),
+    );
+
+    return children;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isCompact = MediaQuery.of(context).size.width <= 640;
+    final effortText = _formatReasoningEffort(widget.ws.reasoningEffort);
+    final modelName = widget.ws.activeModelName.isNotEmpty ? widget.ws.activeModelName : '默认模型';
+
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: isCompact ? 10 : 12,
-        vertical: isCompact ? 10 : 8,
+        horizontal: isCompact ? 10 : 14,
+        vertical: isCompact ? 8 : 8,
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: widget.colors.inputBg,
-                borderRadius: BorderRadius.circular(isCompact ? 24 : 20),
-                border: Border.all(color: widget.colors.divider),
-              ),
-              child: Focus(
-                focusNode: widget.focusNode,
-                onKeyEvent: _handleKey,
-                child: TextField(
-                  controller: widget.controller,
-                  // 始终允许输入：生成中也可提前打字，发送按钮由外层控制是否可点击。
-                  enabled: true,
-                  maxLines: null,
-                  keyboardType: TextInputType.multiline,
-                  textInputAction: TextInputAction.newline,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontSize: 14,
+      child: Container(
+        decoration: BoxDecoration(
+          color: widget.colors.inputBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: widget.colors.divider.withValues(alpha: 0.6)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── 文本输入区域 ──
+            Focus(
+              focusNode: widget.focusNode,
+              onKeyEvent: _handleKey,
+              child: TextField(
+                controller: widget.controller,
+                enabled: true,
+                maxLines: null,
+                minLines: 1,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 14,
+                ),
+                decoration: InputDecoration(
+                  hintText: widget.isGenerating
+                      ? 'AI 回复中... (可继续输入，不可发送)'
+                      : 'Ask anything, @ to mention, / for actions',
+                  hintStyle: TextStyle(
+                    color: widget.colors.subtext.withValues(alpha: 0.7),
+                    fontSize: 13,
                   ),
-                  decoration: InputDecoration(
-                    hintText: widget.isGenerating
-                        ? 'AI 回复中... (可继续输入，不可发送)'
-                        : widget.enabled
-                        ? (isCompact
-                              ? '发送消息...'
-                              : '发送消息... (Enter 发送，Shift+Enter 换行)')
-                        : '等待连接中...',
-                    hintStyle: TextStyle(
-                      color: widget.colors.subtext,
-                      fontSize: isCompact ? 12 : 13,
-                    ),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: isCompact ? 16 : 16,
-                      vertical: isCompact ? 13 : 10,
-                    ),
-                    border: InputBorder.none,
-                  ),
+                  contentPadding: const EdgeInsets.fromLTRB(16, 13, 16, 8),
+                  border: InputBorder.none,
                 ),
               ),
             ),
-          ),
-          SizedBox(width: isCompact ? 6 : 8),
-          IconButton(
-            onPressed: widget.onAttach,
-            icon: Icon(
-              Icons.attach_file_rounded,
-              color: widget.enabled
-                  ? widget.colors.accent
-                  : widget.colors.subtext,
-            ),
-            style: IconButton.styleFrom(
-              backgroundColor: widget.enabled
-                  ? widget.colors.accent.withValues(alpha: 0.15)
-                  : Colors.transparent,
-              shape: const CircleBorder(),
-              minimumSize: Size(isCompact ? 44 : 40, isCompact ? 44 : 40),
-            ),
-          ),
-          SizedBox(width: isCompact ? 2 : 4),
-          IconButton(
-            tooltip: widget.isGenerating ? '打断生成' : '发送消息',
-            onPressed: widget.isGenerating
-                ? widget.onStop
-                : (widget.enabled ? widget.onSend : null),
-            icon: widget.isGenerating
-                ? Container(
-                    width: 13,
-                    height: 13,
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent,
-                      borderRadius: BorderRadius.circular(2.5),
+
+            // ── 底部操作栏: +  ModelName  Effort  ^  ......  -> ──
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+              child: Row(
+                children: [
+                  // + 按钮 (上下文挂载/附件)
+                  IconButton(
+                    tooltip: 'Add context or files',
+                    onPressed: widget.onAttach,
+                    icon: Icon(
+                      Icons.add,
+                      size: 18,
+                      color: widget.colors.subtext,
                     ),
-                  )
-                : Icon(
-                    Icons.send_rounded,
-                    color: widget.enabled
-                        ? widget.colors.accent
-                        : widget.colors.subtext,
+                    style: IconButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(26, 26),
+                    ),
                   ),
-            style: IconButton.styleFrom(
-              backgroundColor: widget.isGenerating
-                  ? Colors.redAccent.withValues(alpha: 0.16)
-                  : (widget.enabled
-                      ? widget.colors.accent.withValues(alpha: 0.15)
-                      : Colors.transparent),
-              shape: const CircleBorder(),
-              minimumSize: Size(isCompact ? 48 : 40, isCompact ? 48 : 40),
+                  const SizedBox(width: 4),
+
+                  // 模型与思考等级二级级联菜单 (MenuAnchor + SubmenuButton)
+                  MenuAnchor(
+                    alignmentOffset: const Offset(0, -6),
+                    style: MenuStyle(
+                      backgroundColor: WidgetStatePropertyAll(widget.colors.inputBg),
+                      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+                      shape: WidgetStatePropertyAll(
+                        RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          side: BorderSide(color: widget.colors.divider.withValues(alpha: 0.6)),
+                        ),
+                      ),
+                      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 4)),
+                    ),
+                    menuChildren: _buildMenuChildren(context),
+                    builder: (context, controller, child) {
+                      return InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        hoverColor: Colors.white.withValues(alpha: 0.05),
+                        onTap: () {
+                          if (controller.isOpen) {
+                            controller.close();
+                          } else {
+                            controller.open();
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3.5),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ConstrainedBox(
+                                constraints: BoxConstraints(maxWidth: isCompact ? 130 : 260),
+                                child: Text(
+                                  modelName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w400,
+                                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.88),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                effortText,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w400,
+                                  color: widget.colors.subtext,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.keyboard_arrow_up_rounded,
+                                size: 14,
+                                color: widget.colors.subtext,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+
+                  const Spacer(),
+
+                  // 发送 / 停止生成按钮 (简约圆形 ->)
+                  IconButton(
+                    tooltip: widget.isGenerating ? 'Stop generating' : 'Send message',
+                    onPressed: widget.isGenerating
+                        ? widget.onStop
+                        : (widget.enabled ? widget.onSend : null),
+                    icon: widget.isGenerating
+                        ? Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(1.5),
+                            ),
+                          )
+                        : Icon(
+                            Icons.arrow_forward_rounded,
+                            size: 16,
+                            color: widget.enabled
+                                ? Colors.white
+                                : widget.colors.subtext.withValues(alpha: 0.4),
+                          ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: widget.isGenerating
+                          ? Colors.redAccent.withValues(alpha: 0.8)
+                          : (widget.enabled
+                              ? const Color(0xFF333538)
+                              : Colors.transparent),
+                      shape: const CircleBorder(),
+                      minimumSize: const Size(28, 28),
+                      padding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

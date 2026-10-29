@@ -10,6 +10,7 @@ import uuid
 import time
 import logging
 import fnmatch
+import inspect
 from typing import Optional, Callable
 from .trace_collector import TraceCollector, StepTrace
 
@@ -301,6 +302,7 @@ class AgentLoop:
         session_id: str = "default",
         workspace_dir: str = "",
         approval_policy: str = "ask",
+        reasoning_effort: str = "high",
     ):
         self.llm = llm_provider
         self.tools = tool_registry
@@ -319,6 +321,8 @@ class AgentLoop:
         self.session_id = session_id
         self.workspace_dir = workspace_dir
         self.approval_policy = approval_policy or os.environ.get("LUMI_APPROVAL_POLICY", "ask")
+        effort = (reasoning_effort or "high").lower()
+        self.reasoning_effort = effort if effort in ("low", "medium", "high") else "high"
 
         # 任务 Trace 收集器
         self.trace_collector = TraceCollector(session_id=self.session_id, msg_id=self.msg_id)
@@ -398,10 +402,18 @@ class AgentLoop:
                 tool_calls = None
                 text_started = False
 
-                async for event in self.llm.chat_stream(
-                    messages=prepared_messages,
-                    tools=tools_for_step,
-                ):
+                llm_kwargs = {
+                    "messages": prepared_messages,
+                    "tools": tools_for_step,
+                }
+                try:
+                    sig = inspect.signature(self.llm.chat_stream)
+                    if "reasoning_effort" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                        llm_kwargs["reasoning_effort"] = self.reasoning_effort
+                except Exception:
+                    pass
+
+                async for event in self.llm.chat_stream(**llm_kwargs):
                     if self._cancelled:
                         break
 

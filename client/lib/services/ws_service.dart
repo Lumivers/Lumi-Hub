@@ -150,10 +150,12 @@ class WsService extends ChangeNotifier {
   // ── 模型配置与快速切换 ──
   String _activeModelId = 'default';
   String _activeModelName = '';
+  String _reasoningEffort = 'high';
   List<Map<String, dynamic>> _configuredModels = [];
 
   String get activeModelId => _activeModelId;
   String get activeModelName => _activeModelName.isNotEmpty ? _activeModelName : '默认模型';
+  String get reasoningEffort => _reasoningEffort;
   List<Map<String, dynamic>> get configuredModels => List.unmodifiable(_configuredModels);
 
   // 约定 AI 回复 id 与请求 message_id 的映射规则。
@@ -389,6 +391,7 @@ class WsService extends ChangeNotifier {
       'session_id': _activeSessionId,
       'workspace_path': _activeWorkspacePath,
       'attachments': attachments,
+      'reasoning_effort': _reasoningEffort,
     };
     if (skillName != null && skillName.isNotEmpty) {
       payload['skill_name'] = skillName;
@@ -1635,6 +1638,9 @@ class WsService extends ChangeNotifier {
     if (resp != null) {
       final payload = resp['payload'] as Map<String, dynamic>? ?? {};
       _activeModelId = (payload['active_model_id'] as String?) ?? 'default';
+      if (payload['reasoning_effort'] != null) {
+        _reasoningEffort = (payload['reasoning_effort'] as String).toLowerCase();
+      }
       final list = payload['models'] as List<dynamic>? ?? [];
       _configuredModels = list.map((m) => Map<String, dynamic>.from(m as Map)).toList();
 
@@ -1654,10 +1660,23 @@ class WsService extends ChangeNotifier {
       _activeModelId = modelId;
       final payload = resp['payload'] as Map<String, dynamic>? ?? {};
       _activeModelName = (payload['name'] as String?) ?? (payload['model'] as String?) ?? _activeModelName;
+      if (payload['reasoning_effort'] != null) {
+        _reasoningEffort = (payload['reasoning_effort'] as String).toLowerCase();
+      }
       notifyListeners();
       return true;
     }
     return false;
+  }
+
+  /// 快速切换思考/推理等级 (low / medium / high)
+  Future<bool> setReasoningEffort(String level) async {
+    final clean = level.trim().toLowerCase();
+    if (!['low', 'medium', 'high'].contains(clean)) return false;
+    _reasoningEffort = clean;
+    notifyListeners();
+    final resp = await sendRequest('LLM_SET_THINKING_LEVEL', {'level': clean});
+    return resp != null && resp['payload']?['status'] == 'success';
   }
 
   /// 保存或添加模型 Profile

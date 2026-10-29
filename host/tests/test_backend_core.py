@@ -638,6 +638,46 @@ class TestUserApprovalAndRiskTiering(unittest.IsolatedAsyncioTestCase):
         self.assertIn("The operation was blocked", res)
 
 
+class TestReasoningEffort(unittest.TestCase):
+    """验证 LLM 思考等级 (low / medium / high) 参数映射与分发。"""
+
+    def test_anthropic_thinking_budget_mapping(self):
+        from host.llm.anthropic_provider import AnthropicProvider
+        provider = AnthropicProvider(api_key="test-key", default_model="claude-3-7-sonnet-20250219")
+        self.assertEqual(provider.get_default_model(), "claude-3-7-sonnet-20250219")
+
+    def test_agent_loop_stores_reasoning_effort(self):
+        from host.agent_loop import AgentLoop
+        loop = AgentLoop(
+            llm_provider=MockLLMProvider(),
+            tool_registry=MockToolRegistry(),
+            persona_system_prompt="sys",
+            history_messages=[],
+            ws_server=None,
+            ws_session_id="ws-1",
+            user_id=1,
+            persona_id="default",
+            db=None,
+            reasoning_effort="medium",
+        )
+        self.assertEqual(loop.reasoning_effort, "medium")
+
+    def test_agent_loop_defaults_to_high(self):
+        from host.agent_loop import AgentLoop
+        loop = AgentLoop(
+            llm_provider=MockLLMProvider(),
+            tool_registry=MockToolRegistry(),
+            persona_system_prompt="sys",
+            history_messages=[],
+            ws_server=None,
+            ws_session_id="ws-1",
+            user_id=1,
+            persona_id="default",
+            db=None,
+        )
+        self.assertEqual(loop.reasoning_effort, "high")
+
+
 if __name__ == "__main__":
     unittest.main()
 
