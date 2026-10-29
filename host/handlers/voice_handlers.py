@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import os
 import time
 import uuid
+from typing import Any
 
 import logging
 logger = logging.getLogger("lumi")
@@ -11,6 +14,7 @@ logger = logging.getLogger("lumi")
 from ..voice_extensions import (
     TTSRequest,
     VoiceProviderError,
+    DashScopeTTSProvider,
     build_style_plan,
     compile_ssml,
     plan_style_for_text,
@@ -18,6 +22,54 @@ from ..voice_extensions import (
 
 
 class VoiceHandlersMixin:
+    def _setup_voice_extensions(self) -> None:
+        """初始化语音扩展。"""
+        provider_name = str(os.environ.get("LUMI_VOICE_PROVIDER", "dashscope")).strip().lower()
+        if provider_name != "dashscope":
+            logger.warning(f"[Lumi-Hub] Voice provider '{provider_name}' is not supported yet")
+            return
+
+        env_default_voice = str(os.environ.get("LUMI_DASHSCOPE_VOICE_ID", "")).strip()
+        cached_default_voice = str(self._voice_config_cache.get("dashscope_voice_id", "")).strip()
+        default_voice = env_default_voice or cached_default_voice
+
+        provider = DashScopeTTSProvider(
+            model=str(os.environ.get("LUMI_DASHSCOPE_MODEL", "cosyvoice-v3.5-plus")).strip(),
+            default_voice=default_voice,
+            websocket_url=str(os.environ.get("LUMI_DASHSCOPE_WS_URL", "")).strip(),
+            http_url=str(os.environ.get("LUMI_DASHSCOPE_HTTP_URL", "")).strip(),
+        )
+        cached_api_key = str(self._voice_config_cache.get("dashscope_api_key", "")).strip()
+        if cached_api_key:
+            provider.set_api_key(cached_api_key)
+
+        self.voice_registry.register_tts("dashscope", provider)
+        self.voice_registry.set_default_tts("dashscope")
+        self._dashscope_provider = provider
+
+        if not provider.has_api_key():
+            logger.warning("[Lumi-Hub] DASHSCOPE_API_KEY is empty. Voice synthesis requests will fail until configured.")
+
+        logger.info("[Lumi-Hub] Voice extension registered: dashscope")
+
+    def _load_voice_config(self) -> dict[str, Any]:
+        if not os.path.exists(self.voice_config_path):
+            return {}
+        try:
+            with open(self.voice_config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"[Lumi-Hub] Failed to load voice config: {e}")
+            return {}
+
+    def _save_voice_config(self) -> None:
+        try:
+            with open(self.voice_config_path, "w", encoding="utf-8") as f:
+                json.dump(self._voice_config_cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[Lumi-Hub] Failed to save voice config: {e}")
+
     async def _dispatch_voice_tts_request(self, message: dict, ws_session_id: str) -> None:
         # TTS 合成放到后台任务，避免阻塞主消息分发协程。
         self._spawn_voice_tts_task(message, ws_session_id)

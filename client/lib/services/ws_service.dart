@@ -12,6 +12,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/message.dart';
 
+part 'ws_service_chat.dart';
+part 'ws_service_features.dart';
+part 'ws_service_llm.dart';
+part 'ws_service_session.dart';
 part 'ws_service_tts.dart';
 part 'ws_service_upload.dart';
 
@@ -40,10 +44,13 @@ class _TtsTurnBuffer {
 class WsService extends ChangeNotifier {
   /// WebSocket + 协议状态入口。
   ///
-  /// 职责：
-  /// 1. 管理连接/重连/心跳
-  /// 2. 处理鉴权、聊天、历史、人格、MCP、上传、语音协议消息
-  /// 3. 维护前端页面直接消费的状态（messages、isGenerating、personas 等）
+  /// 采用 part 文件解耦业务模块：
+  /// - ws_service_chat.dart: 对话、流式回包、打断、Trace 轨迹与回滚
+  /// - ws_service_llm.dart: 模型列表拉取、模型切换、推理思考强度调节
+  /// - ws_service_session.dart: 工作区、会话、人格、历史记录分页与消息删除
+  /// - ws_service_features.dart: MCP、记忆档案、技能管理、审批授权与问答交互
+  /// - ws_service_tts.dart: 语音流分块合成与本地播放
+  /// - ws_service_upload.dart: 大文件分片上传
   static const String _defaultUrl = 'ws://127.0.0.1:8765';
   static const String _serverUrlStorage = 'ws.server_url';
   static const String _accessKeyStorage = 'ws.access_key';
@@ -158,24 +165,6 @@ class WsService extends ChangeNotifier {
   String get reasoningEffort => _reasoningEffort;
   List<Map<String, dynamic>> get configuredModels => List.unmodifiable(_configuredModels);
 
-  // 约定 AI 回复 id 与请求 message_id 的映射规则。
-  String _assistantMsgId(String msgId) => '${msgId}_ai';
-
-  // 合并流式回复时，尽量做重叠去重，避免重复片段导致“叠字”。
-  String _mergeAssistantContent(String existing, String incoming) {
-    if (incoming.isEmpty) return existing;
-    if (existing.isEmpty) return incoming;
-    if (existing.endsWith(incoming)) return existing;
-
-    final maxOverlap = min(existing.length, incoming.length);
-    for (var overlap = maxOverlap; overlap > 0; overlap--) {
-      if (existing.endsWith(incoming.substring(0, overlap))) {
-        return existing + incoming.substring(overlap);
-      }
-    }
-    return existing + incoming;
-  }
-
   // 人格操作响应流
   final _personaController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get personaResponses =>
@@ -195,15 +184,12 @@ class WsService extends ChangeNotifier {
     _serverUrl = prefs.getString(_serverUrlStorage) ?? _defaultUrl;
     _accessKey = prefs.getString(_accessKeyStorage) ?? '';
     isRestoringAuth = true;
-    // 兜底：若连接已建立且尚未鉴权，触发自动恢复/默认登录。
     if (_status == WsStatus.connected && !_isAuthenticated) {
       restoreAuth();
     }
     if (!_authInitCompleter.isCompleted) {
       _authInitCompleter.complete();
     }
-    // 注意：这里不再乐观地直接设置 _isAuthenticated = true
-    // 而是等待 connect() 之后通过 AUTH_RESTORE 从服务端拿回结果，才进入 ChatScreen
     notifyListeners();
   }
 
@@ -231,9 +217,7 @@ class WsService extends ChangeNotifier {
   Future<void> connect() async {
     if (_status == WsStatus.connected || _status == WsStatus.connecting) return;
 
-    // 等待本地 token/serverUrl/accessKey 读取完成，避免热重启后自动登录竞态。
     await _authInitCompleter.future;
-
     _setStatus(WsStatus.connecting);
 
     try {
@@ -311,131 +295,16 @@ class WsService extends ChangeNotifier {
     _setStatus(WsStatus.disconnected);
   }
 
-  // ── 发送消息 ───────────────────────────────────────────────────────────
-
-  void sendMessage(
-    String text, {
-    List<Map<String, dynamic>> attachments = const [],
-    String? skillName,
-    Map<String, dynamic>? skillParams,
-  }) {
-    final normalized = text.trim();
-    if (_status != WsStatus.connected) return;
-    if (normalized.isEmpty && attachments.isEmpty && skillName == null) return;
-
-    final contentForHost = normalized.isNotEmpty
-        ? normalized
-        : (skillName != null ? '执行技能：$skillName' : '我上传了附件，请先确认接收并根据附件内容回答。');
-
-    final requestId = _genId();
-    final now = DateTime.now();
-
-    // 先加入本地：附件和文本分成两个气泡
-    if (attachments.isNotEmpty) {
-      final att = attachments.first;
-      final fileName = (att['file_name'] ?? '未命名文件').toString();
-      final mimeType = (att['mime_type'] ?? '').toString().toLowerCase();
-      final localPath = (att['local_path'] ?? '').toString();
-      final lowerName = fileName.toLowerCase();
-      final isImage =
-          mimeType.startsWith('image/') ||
-          lowerName.endsWith('.png') ||
-          lowerName.endsWith('.jpg') ||
-          lowerName.endsWith('.jpeg') ||
-          lowerName.endsWith('.webp') ||
-          lowerName.endsWith('.gif');
-      final prefix = isImage ? '[图片]' : '[附件]';
-      _messages.add(
-        ChatMessage(
-          id: '${requestId}_att',
-          content: '$prefix $localPath|||$fileName',
-          sender: MessageSender.me,
-          time: now,
-          extra: att,
-        ),
-      );
-    }
-
-    if (normalized.isNotEmpty || skillName != null) {
-      _messages.add(
-        ChatMessage(
-          id: requestId,
-          content: normalized.isNotEmpty
-              ? normalized
-              : (skillName != null ? '⚡ 触发技能: $skillName' : ''),
-          sender: MessageSender.me,
-          time: now,
-        ),
-      );
-    }
-
-    // 加 AI 正在输入占位
-    final placeholder = ChatMessage(
-      id: '${requestId}_typing',
-      content: '',
-      sender: MessageSender.ai,
-      time: now,
-      isTyping: true,
-      extra: {'traces': _traceCache.putIfAbsent(requestId, () => <Map<String, dynamic>>[])},
-    );
-    _messages.add(placeholder);
-    _isGenerating = true;
-    _generationUnlockTimer?.cancel();
-    notifyListeners();
-
-    // 发送到 Host
-    final payload = <String, dynamic>{
-      'content': contentForHost,
-      'context_id': 'default',
-      'persona_id': _activePersonaId,
-      'session_id': _activeSessionId,
-      'workspace_path': _activeWorkspacePath,
-      'attachments': attachments,
-      'reasoning_effort': _reasoningEffort,
-    };
-    if (skillName != null && skillName.isNotEmpty) {
-      payload['skill_name'] = skillName;
-      payload['skill_params'] = skillParams ?? {};
-    }
-
-    _send({
-      'message_id': requestId,
-      'type': 'CHAT_REQUEST',
-      'source': 'client',
-      'target': 'host',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'payload': payload,
-    });
-  }
-
-  /// 打断当前正在进行的 AI 生成/工具执行
-  void cancelCurrentGeneration() {
-    if (!_isGenerating) return;
-    _send({
-      'type': 'CHAT_CANCEL',
-      'source': 'client',
-      'target': 'host',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'payload': {
-        'session_id': _activeSessionId,
-      },
-    });
-    _isGenerating = false;
-    _generationUnlockTimer?.cancel();
-    notifyListeners();
-  }
-
-  // ── 内部 ───────────────────────────────────────────────────────────────
+  // ── 协议分发中心 ────────────────────────────────────────────────────────
 
   void _onData(dynamic raw) {
     try {
       final data = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = data['type'] as String? ?? '';
 
-      // 优先处理 pending response（通过 message_id 匹配），不走 switch 分支。
+      // 优先处理 pending response（通过 message_id 匹配）
       _handlePendingResponse(data);
 
-      // 协议分发中心：所有 Host 回包都从这里进入，再路由到具体处理函数。
       switch (type) {
         case 'CHAT_RESPONSE':
           _handleChatResponse(data);
@@ -459,10 +328,8 @@ class WsService extends ChangeNotifier {
           break;
         case 'TOOL_CALL_START':
         case 'TOOL_CALL_RESULT':
-          // 工具调用生命周期由 TRACE_STEP_UPDATE 统一驱动与展示，忽略低层兼容通知
           break;
         case 'PONG':
-          // 心跳回应，忽略
           break;
         case 'CONNECT':
           debugPrint('[WS] 握手确认: ${data['payload']}');
@@ -529,7 +396,6 @@ class WsService extends ChangeNotifier {
         case 'SKILL_LIST_RESPONSE':
         case 'SKILL_INSTALL_RESPONSE':
         case 'SKILL_UNINSTALL_RESPONSE':
-          // 已由 _handlePendingResponse 消费
           break;
         default:
           debugPrint('[WS] 未处理消息类型: $type');
@@ -539,233 +405,17 @@ class WsService extends ChangeNotifier {
     }
   }
 
-  void _handleChatMessageSync(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final msgId = (payload['message_id'] as String?) ?? (data['message_id'] as String?) ?? '';
-    if (msgId.isEmpty) return;
+  void _handlePendingResponse(Map<String, dynamic> data) {
+    final msgId = data['message_id'] as String?;
+    if (msgId == null || msgId.isEmpty) return;
 
-    // 回声抑制 (Echo Suppression): 若本地已包含该消息（例如自身发送并乐观渲染），直接忽略
-    if (_messages.any((m) => m.id == msgId)) {
-      return;
-    }
-
-    final targetSessionId = payload['session_id'] as String?;
-    if (targetSessionId != null &&
-        _activeSessionId != null &&
-        targetSessionId != _activeSessionId) {
-      return;
-    }
-
-    final content = payload['content'] as String? ?? '';
-    final role = payload['role'] as String? ?? 'user';
-    final now = DateTime.now();
-
-    // 渲染对端设备发送的用户消息
-    if (role == 'user' && content.isNotEmpty) {
-      _messages.add(
-        ChatMessage(
-          id: msgId,
-          content: content,
-          sender: MessageSender.me,
-          time: now,
-        ),
-      );
-
-      // 为接收端挂上 AI 正在输入的 typing 占位，并开启生成状态
-      final typingId = '${msgId}_typing';
-      if (!_messages.any((m) => m.id == typingId)) {
-        _messages.add(
-          ChatMessage(
-            id: typingId,
-            content: '',
-            sender: MessageSender.ai,
-            time: now,
-            isTyping: true,
-            extra: {'traces': _traceCache.putIfAbsent(msgId, () => <Map<String, dynamic>>[])},
-          ),
-        );
-      }
-      _isGenerating = true;
-      _generationUnlockTimer?.cancel();
-      _generationUnlockTimer = Timer(const Duration(seconds: 120), () {
-        _isGenerating = false;
-        notifyListeners();
-      });
-
-      notifyListeners();
+    final completer = _pendingResponses.remove(msgId);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(data);
     }
   }
 
-  void _handleChatResponse(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final targetSessionId = payload['session_id'] as String?;
-    if (targetSessionId != null &&
-        _activeSessionId != null &&
-        targetSessionId != _activeSessionId) {
-      return;
-    }
-
-    final content = payload['content'] as String? ?? '';
-    if (content.isEmpty) return;
-
-    final msgId = data['message_id'] as String? ?? _genId();
-    final assistantId = _assistantMsgId(msgId);
-    final isFromStreaming = _streamingMsgIds.contains(msgId);
-
-    // 同 message_id 的多次 CHAT_RESPONSE 视为追加/覆盖。
-    final existingIndex = _messages.indexWhere(
-      (m) => m.id == assistantId && m.sender == MessageSender.ai,
-    );
-    if (existingIndex != -1) {
-      final existing = _messages[existingIndex];
-
-      // 支持分段回复：同 message_id 的多次 CHAT_RESPONSE 视为追加。
-      // 若来自 CHAT_STREAM_CHUNK 流程，则最终 CHAT_RESPONSE 以完整文本覆盖。
-      final nextContent = isFromStreaming
-          ? content
-          : _mergeAssistantContent(existing.content, content);
-
-      final currentExtra = Map<String, dynamic>.from(existing.extra ?? {});
-      if (_traceCache.containsKey(msgId)) {
-        currentExtra['traces'] = List<Map<String, dynamic>>.from(_traceCache[msgId]!);
-      }
-
-      _messages[existingIndex] = existing.copyWith(
-        content: nextContent,
-        isTyping: false,
-        extra: currentExtra,
-      );
-      if (isFromStreaming) {
-        _streamingMsgIds.remove(msgId);
-      }
-      notifyListeners();
-      return;
-    }
-
-    // 移除占位，插入真实回复
-    _messages.removeWhere((m) => m.isTyping);
-    _messages.add(
-      ChatMessage(
-        id: assistantId,
-        content: content,
-        sender: MessageSender.ai,
-        time: DateTime.now(),
-        extra: {'traces': List<Map<String, dynamic>>.from(_traceCache[msgId] ?? [])},
-      ),
-    );
-
-    notifyListeners();
-  }
-
-  void _handleChatStreamChunk(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final targetSessionId = payload['session_id'] as String?;
-    if (targetSessionId != null &&
-        _activeSessionId != null &&
-        targetSessionId != _activeSessionId) {
-      return;
-    }
-
-    final chunk = payload['chunk'] as String? ?? '';
-    final finished = payload['finished'] == true;
-    final msgId = data['message_id'] as String? ?? _genId();
-    final assistantId = _assistantMsgId(msgId);
-
-    // 结束帧只负责状态收口。
-    if (finished) {
-      _streamingMsgIds.add(msgId);
-      _isGenerating = false;
-      _generationUnlockTimer?.cancel();
-      notifyListeners();
-      return;
-    }
-
-    if (chunk.isEmpty) return;
-
-    // 第一块到达时移除 typing 占位。
-    _streamingMsgIds.add(msgId);
-    _messages.removeWhere((m) => m.isTyping);
-
-    final existingIndex = _messages.indexWhere(
-      (m) => m.id == assistantId && m.sender == MessageSender.ai,
-    );
-
-    if (existingIndex == -1) {
-      _messages.add(
-        ChatMessage(
-          id: assistantId,
-          content: chunk,
-          sender: MessageSender.ai,
-          time: DateTime.now(),
-          extra: {'traces': List<Map<String, dynamic>>.from(_traceCache[msgId] ?? [])},
-        ),
-      );
-    } else {
-      final existing = _messages[existingIndex];
-      final currentExtra = Map<String, dynamic>.from(existing.extra ?? {});
-      if (_traceCache.containsKey(msgId)) {
-        currentExtra['traces'] = List<Map<String, dynamic>>.from(_traceCache[msgId]!);
-      }
-      _messages[existingIndex] = existing.copyWith(
-        content: _mergeAssistantContent(existing.content, chunk),
-        isTyping: false,
-        extra: currentExtra,
-      );
-    }
-
-    notifyListeners();
-  }
-
-  void _handleTraceStepUpdate(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final msgId = data['message_id'] as String? ?? '';
-    if (msgId.isEmpty) return;
-
-    final stepId = payload['step_id'];
-    final traceList = _traceCache.putIfAbsent(msgId, () => <Map<String, dynamic>>[]);
-    final existingStepIdx = traceList.indexWhere((s) => s['step_id'] == stepId);
-    if (existingStepIdx != -1) {
-      traceList[existingStepIdx] = payload;
-    } else {
-      traceList.add(payload);
-    }
-
-    final assistantId = _assistantMsgId(msgId);
-    final typingId = '${msgId}_typing';
-
-    // 优先尝试查找助手消息或正在输入的占位
-    int targetIdx = _messages.indexWhere((m) => m.id == assistantId);
-    if (targetIdx == -1) {
-      targetIdx = _messages.indexWhere((m) => m.id == typingId);
-    }
-
-    if (targetIdx != -1) {
-      final msg = _messages[targetIdx];
-      final currentExtra = Map<String, dynamic>.from(msg.extra ?? {});
-      currentExtra['traces'] = List<Map<String, dynamic>>.from(traceList);
-      _messages[targetIdx] = msg.copyWith(extra: currentExtra);
-      notifyListeners();
-    }
-  }
-
-  void _handleTraceSummary(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final msgId = data['message_id'] as String? ?? '';
-    if (msgId.isEmpty) return;
-
-    final assistantId = _assistantMsgId(msgId);
-    final targetIdx = _messages.indexWhere((m) => m.id == assistantId);
-    if (targetIdx != -1) {
-      final msg = _messages[targetIdx];
-      final currentExtra = Map<String, dynamic>.from(msg.extra ?? {});
-      currentExtra['trace_summary'] = payload;
-      if (payload['files_changed'] != null) {
-        currentExtra['files_changed'] = payload['files_changed'];
-      }
-      _messages[targetIdx] = msg.copyWith(extra: currentExtra);
-      notifyListeners();
-    }
-  }
+  // ── 认证逻辑 ─────────────────────────────────────────────────────────
 
   Future<void> _handleAuthResponse(Map<String, dynamic> data) async {
     final payload = data['payload'] as Map<String, dynamic>? ?? {};
@@ -794,150 +444,6 @@ class WsService extends ChangeNotifier {
       debugPrint('[WS] Auth 响应未成功: ${payload['message']}');
     }
   }
-
-  void _handleAuthRequired(Map<String, dynamic> data) {
-    debugPrint('[WS] 收到审批请求: ${data['message_id']}');
-    _authRequestController.add(data);
-  }
-
-  void _handleAskUserQuestion(Map<String, dynamic> data) {
-    debugPrint('[WS] 收到用户问答卡片请求: ${data['message_id']}');
-    _userQuestionController.add(data);
-  }
-
-  void _handleHistoryResponse(Map<String, dynamic> data) {
-    final msgId = data['message_id'] as String?;
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final messagesJson = payload['messages'] as List<dynamic>? ?? [];
-    final hasMore = payload['has_more'] == true;
-    final offset = msgId != null
-        ? (_historyRequestOffsets.remove(msgId) ?? 0)
-        : 0;
-
-    final loaded = <ChatMessage>[];
-    for (var m in messagesJson) {
-      final msg = m as Map<String, dynamic>;
-      final isMe = msg['role'] == 'user';
-      final extraRaw = msg['extra'];
-      Map<String, dynamic>? extraMap;
-      if (extraRaw is Map) {
-        extraMap = Map<String, dynamic>.from(extraRaw);
-      }
-
-      // 同步恢复历史中的 Trace 执行轨迹至本地缓存
-      if (extraMap != null && extraMap['traces'] is List) {
-        final rawId = msg['message_id']?.toString() ?? '';
-        final baseMsgId = rawId.replaceAll(RegExp(r'_ai$'), '');
-        if (baseMsgId.isNotEmpty) {
-          final list = (extraMap['traces'] as List)
-              .whereType<Map<dynamic, dynamic>>()
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList();
-          _traceCache[baseMsgId] = list;
-        }
-      }
-
-      loaded.add(
-        ChatMessage(
-          id: msg['message_id']?.toString() ?? _genId(),
-          content: msg['content'] as String? ?? '',
-          sender: isMe ? MessageSender.me : MessageSender.ai,
-          time: DateTime.fromMillisecondsSinceEpoch(
-            (msg['timestamp'] as num).toInt(),
-          ),
-          extra: extraMap,
-        ),
-      );
-    }
-
-    // offset=0 代表首屏加载；否则是向上翻页加载更早记录。
-    if (offset == 0) {
-      _messages
-        ..clear()
-        ..addAll(loaded);
-    } else {
-      // 向上翻页时把更早消息插入头部，同时去重。
-      final existingIds = _messages.map((m) => m.id).toSet();
-      final prepend = loaded.where((m) => !existingIds.contains(m.id)).toList();
-      _messages.insertAll(0, prepend);
-    }
-
-    _historyOffset = offset + loaded.length;
-    _historyHasMore = hasMore;
-    _historyLoading = false;
-    if (msgId != null) {
-      final completer = _historyRequestCompleters.remove(msgId);
-      if (completer != null && !completer.isCompleted) {
-        completer.complete();
-      }
-    }
-    notifyListeners();
-  }
-
-  void _handlePersonaList(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final list = payload['personas'] as List<dynamic>? ?? [];
-    _personas = list.map((p) => Map<String, dynamic>.from(p as Map)).toList();
-    if (_activePersonaId.isEmpty && _personas.isNotEmpty) {
-      _activePersonaId = _personas.first['id'] as String? ?? '';
-    }
-    notifyListeners();
-  }
-
-  void _handleSessionListResponse(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final list = payload['sessions'] as List<dynamic>? ?? [];
-    _sessions = list.map((s) => Map<String, dynamic>.from(s as Map)).toList();
-
-    if (_sessions.isEmpty) {
-      createSession(workspacePath: _activeWorkspacePath);
-    } else {
-      final exists = _sessions.any((s) => s['id'] == _activeSessionId);
-      if (!exists) {
-        _activeSessionId = _sessions.first['id'] as String?;
-        final pid = _sessions.first['persona_id'] as String?;
-        if (pid != null && pid.isNotEmpty) {
-          _activePersonaId = pid;
-        }
-      }
-      unawaited(loadInitialHistory());
-    }
-    notifyListeners();
-  }
-
-  void _handleSessionCreateResponse(Map<String, dynamic> data) {
-    final payload = data['payload'] as Map<String, dynamic>? ?? {};
-    final session = payload['session'] as Map<String, dynamic>?;
-    if (session != null) {
-      final sid = session['id'] as String?;
-      _sessions.removeWhere((s) => s['id'] == sid);
-      _sessions.insert(0, session);
-      if (sid != null) {
-        _activeSessionId = sid;
-        final pid = session['persona_id'] as String?;
-        if (pid != null && pid.isNotEmpty) {
-          _activePersonaId = pid;
-        }
-        _messages.clear();
-        _historyOffset = 0;
-        _historyHasMore = false;
-        unawaited(loadInitialHistory());
-      }
-    }
-    notifyListeners();
-  }
-
-  void _handlePendingResponse(Map<String, dynamic> data) {
-    final msgId = data['message_id'] as String?;
-    if (msgId == null || msgId.isEmpty) return;
-
-    final completer = _pendingResponses.remove(msgId);
-    if (completer != null && !completer.isCompleted) {
-      completer.complete(data);
-    }
-  }
-
-  // ── 认证方法 ─────────────────────────────────────────────────────────
 
   void login(String username, String password) {
     if (_status != WsStatus.connected) return;
@@ -978,328 +484,6 @@ class WsService extends ChangeNotifier {
     register(nickname, '');
   }
 
-  void sendAuthResponse(String taskId, String decision) {
-    if (_status != WsStatus.connected) return;
-    _send({
-      'message_id': taskId, // 必须回传相同的 message_id/task_id
-      'type': 'AUTH_RESPONSE',
-      'source': 'client',
-      'target': 'host',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'payload': {'task_id': taskId, 'decision': decision, 'reason': ''},
-    });
-  }
-
-  void sendUserQuestionResponse(String messageId, List<Map<String, dynamic>> answers) {
-    if (_status != WsStatus.connected) return;
-    _send({
-      'message_id': messageId, // 必须回传相同的 message_id 作为挂起 Future 的唤醒键
-      'type': 'USER_QUESTION_RESPONSE',
-      'source': 'client',
-      'target': 'host',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'payload': {'answers': answers},
-    });
-  }
-
-  Future<void> requestHistory({int limit = _historyPageSize, int offset = 0}) {
-    if (_status != WsStatus.connected || !_isAuthenticated) {
-      return Future.value();
-    }
-    final msgId = _genId();
-    _historyLoading = true;
-    // 用 message_id 绑定 offset/completer，保证并发请求时结果可正确归位。
-    _historyRequestOffsets[msgId] = offset;
-    final completer = Completer<void>();
-    _historyRequestCompleters[msgId] = completer;
-    notifyListeners();
-    _send({
-      'message_id': msgId,
-      'type': 'HISTORY_REQUEST',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'limit': limit,
-        'offset': offset,
-        'persona_id': _activePersonaId,
-        'session_id': _activeSessionId,
-      },
-    });
-    return completer.future.timeout(
-      const Duration(seconds: 10),
-      onTimeout: () {
-        _historyLoading = false;
-        _historyRequestOffsets.remove(msgId);
-        _historyRequestCompleters.remove(msgId);
-        notifyListeners();
-      },
-    );
-  }
-
-  Future<void> loadInitialHistory({int limit = _historyPageSize}) async {
-    _historyOffset = 0;
-    _historyHasMore = true;
-    await requestHistory(limit: limit, offset: 0);
-  }
-
-  Future<void> loadOlderHistory({int limit = _historyPageSize}) async {
-    if (_historyLoading || !_historyHasMore) return;
-    await requestHistory(limit: limit, offset: _historyOffset);
-  }
-
-  // ── 工作区与会话控制方法 ──
-
-  Future<void> loadRecentWorkspaces() async {
-    final prefs = await SharedPreferences.getInstance();
-    _recentWorkspaces = prefs.getStringList('recent_workspaces') ?? [];
-    if (_recentWorkspaces.isEmpty) {
-      final defaultPath = Directory.current.path;
-      _recentWorkspaces = [defaultPath];
-      await prefs.setStringList('recent_workspaces', _recentWorkspaces);
-    }
-    if (_activeWorkspacePath.isEmpty && _recentWorkspaces.isNotEmpty) {
-      _activeWorkspacePath = _recentWorkspaces.first;
-    }
-    notifyListeners();
-  }
-
-  Future<void> addWorkspace(String path) async {
-    if (path.isEmpty) return;
-    final normalized = path.trim();
-    if (!_recentWorkspaces.contains(normalized)) {
-      _recentWorkspaces.insert(0, normalized);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setStringList('recent_workspaces', _recentWorkspaces);
-    }
-    setActiveWorkspace(normalized);
-  }
-
-  Future<void> removeWorkspace(String path) async {
-    _recentWorkspaces.remove(path);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('recent_workspaces', _recentWorkspaces);
-    if (_activeWorkspacePath == path) {
-      if (_recentWorkspaces.isNotEmpty) {
-        setActiveWorkspace(_recentWorkspaces.first);
-      } else {
-        _activeWorkspacePath = '';
-        _activeSessionId = null;
-        _sessions.clear();
-        _messages.clear();
-      }
-    }
-    notifyListeners();
-  }
-
-  void setActiveWorkspace(String path) {
-    if (_activeWorkspacePath == path) return;
-    _activeWorkspacePath = path;
-    _activeSessionId = null;
-    _messages.clear();
-    _historyOffset = 0;
-    _historyHasMore = false;
-    notifyListeners();
-    requestSessionList(workspacePath: path);
-  }
-
-  void requestSessionList({String? workspacePath}) {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'SESSION_LIST',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'workspace_path': workspacePath ?? _activeWorkspacePath,
-      },
-    });
-  }
-
-  void createSession({String? workspacePath, String? title, String? personaId}) {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'SESSION_CREATE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'workspace_path': workspacePath ?? _activeWorkspacePath,
-        'title': title ?? '新对话',
-        'persona_id': personaId ?? _activePersonaId,
-      },
-    });
-  }
-
-  void switchSession(String sessionId) {
-    if (_activeSessionId == sessionId) return;
-    _activeSessionId = sessionId;
-    final sess = _sessions.firstWhere((s) => s['id'] == sessionId, orElse: () => {});
-    if (sess['persona_id'] != null && sess['persona_id'].toString().isNotEmpty) {
-      _activePersonaId = sess['persona_id'].toString();
-    }
-    _messages.clear();
-    _historyOffset = 0;
-    _historyHasMore = true;
-    _historyLoading = false;
-    notifyListeners();
-    unawaited(loadInitialHistory());
-  }
-
-  void updateSessionTitle(String sessionId, String newTitle) {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'SESSION_UPDATE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'session_id': sessionId,
-        'title': newTitle,
-      },
-    });
-    final idx = _sessions.indexWhere((s) => s['id'] == sessionId);
-    if (idx != -1) {
-      _sessions[idx]['title'] = newTitle;
-      notifyListeners();
-    }
-  }
-
-  void updateSessionPersona(String sessionId, String personaId) {
-    _activePersonaId = personaId;
-    if (_status != WsStatus.connected || !_isAuthenticated) {
-      notifyListeners();
-      return;
-    }
-    _send({
-      'message_id': _genId(),
-      'type': 'SESSION_UPDATE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'session_id': sessionId,
-        'persona_id': personaId,
-      },
-    });
-    final idx = _sessions.indexWhere((s) => s['id'] == sessionId);
-    if (idx != -1) {
-      _sessions[idx]['persona_id'] = personaId;
-    }
-    notifyListeners();
-  }
-
-  void deleteSession(String sessionId) {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'SESSION_DELETE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {'session_id': sessionId},
-    });
-    _sessions.removeWhere((s) => s['id'] == sessionId);
-    if (_activeSessionId == sessionId) {
-      if (_sessions.isNotEmpty) {
-        switchSession(_sessions.first['id']);
-      } else {
-        _activeSessionId = null;
-        _messages.clear();
-        createSession(workspacePath: _activeWorkspacePath);
-      }
-    }
-    notifyListeners();
-  }
-
-  void clearSessionHistory() {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'PERSONA_CLEAR_HISTORY',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'persona_id': _activePersonaId,
-        'session_id': _activeSessionId,
-      },
-    });
-    _messages.clear();
-    _historyOffset = 0;
-    _historyHasMore = false;
-    notifyListeners();
-  }
-
-  void requestPersonaList() {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'PERSONA_LIST',
-      'source': 'client',
-      'target': 'host',
-      'payload': {},
-    });
-  }
-
-  void switchPersona(String personaId) {
-    if (_status != WsStatus.connected) return;
-    _activePersonaId = personaId;
-    _messages.clear();
-    _historyOffset = 0;
-    _historyHasMore = true;
-    _historyLoading = false;
-    notifyListeners();
-    _send({
-      'message_id': _genId(),
-      'type': 'PERSONA_SWITCH',
-      'source': 'client',
-      'target': 'host',
-      'payload': {'persona_id': personaId},
-    });
-    loadInitialHistory();
-  }
-
-  void clearPersonaHistory() {
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'PERSONA_CLEAR_HISTORY',
-      'source': 'client',
-      'target': 'host',
-      'payload': {'persona_id': _activePersonaId},
-    });
-  }
-
-  void deletePersona(String personaId) {
-    if (_status != WsStatus.connected) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'PERSONA_DELETE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {'persona_id': personaId},
-    });
-  }
-
-  void getMcpConfig() {
-    if (_status != WsStatus.connected) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'MCP_CONFIG_GET',
-      'source': 'client',
-      'target': 'host',
-      'payload': {},
-    });
-  }
-
-  void updateMcpConfig(Map<String, dynamic> config) {
-    if (_status != WsStatus.connected) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'MCP_CONFIG_UPDATE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {'config': config},
-    });
-  }
-
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
@@ -1314,134 +498,7 @@ class WsService extends ChangeNotifier {
     }
   }
 
-  void removeMessages(Set<String> messageIds) {
-    if (messageIds.isEmpty) return;
-    _messages.removeWhere((m) => messageIds.contains(m.id));
-    notifyListeners();
-
-    if (_status != WsStatus.connected || !_isAuthenticated) return;
-    _send({
-      'message_id': _genId(),
-      'type': 'MESSAGE_DELETE',
-      'source': 'client',
-      'target': 'host',
-      'payload': {
-        'persona_id': _activePersonaId,
-        'message_ids': messageIds.toList(),
-      },
-    });
-  }
-
-  /// 清空本地消息列表（配合清空历史记录使用）
-  void clearLocalMessages() {
-    _messages.clear();
-    notifyListeners();
-  }
-
-  /// 回退指定文件的代码修改 (支持 Git checkout 与 .Lumi_cache 备份还原)
-  Future<List<Map<String, dynamic>>> revertFiles(List<String> filePaths) async {
-    if (filePaths.isEmpty || _status != WsStatus.connected) return [];
-    final resp = await sendRequest('REVERT_FILES', {
-      'files': filePaths,
-      'workspace_path': _activeWorkspacePath,
-    });
-    if (resp != null && resp['payload']?['results'] != null) {
-      final list = resp['payload']['results'] as List<dynamic>? ?? [];
-      return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
-    return [];
-  }
-
-  /// 获取当前会话中最后一条用户提问消息（排除单纯附件气泡）
-  ChatMessage? get lastUserMessage {
-    for (int i = _messages.length - 1; i >= 0; i--) {
-      final m = _messages[i];
-      if (m.sender == MessageSender.me &&
-          !m.content.startsWith('[附件] ') &&
-          !m.content.startsWith('[图片] ')) {
-        return m;
-      }
-    }
-    return null;
-  }
-
-  /// 判断指定消息是否为当前最新的（即最后一条）用户提问
-  bool isLastUserMessage(String id) {
-    return lastUserMessage?.id == id;
-  }
-
-  /// 判断指定消息是否为更早的历史用户提问（可回滚节点）
-  bool isEarlierUserMessage(String id) {
-    final last = lastUserMessage;
-    if (last == null || last.id == id) return false;
-    final idx = _messages.indexWhere((m) => m.id == id);
-    if (idx == -1) return false;
-    final msg = _messages[idx];
-    return msg.sender == MessageSender.me &&
-        !msg.content.startsWith('[附件] ') &&
-        !msg.content.startsWith('[图片] ');
-  }
-
-  /// 获取从指定用户提问（包含其附件）开始一直到当前会话末尾的所有消息
-  List<ChatMessage> getMessagesFromUserOnwards(String userMsgId) {
-    final attId = '${userMsgId}_att';
-    int startIdx = _messages.indexWhere((m) => m.id == attId);
-    if (startIdx == -1) {
-      startIdx = _messages.indexWhere((m) => m.id == userMsgId);
-    }
-    if (startIdx == -1) return [];
-    return _messages.sublist(startIdx);
-  }
-
-  /// 收集从指定用户提问开始之后所有助手回复中变动过的文件
-  List<Map<String, dynamic>> getFilesChangedFromUserOnwards(String userMsgId) {
-    final msgs = getMessagesFromUserOnwards(userMsgId);
-    final fileMap = <String, Map<String, dynamic>>{};
-    for (final m in msgs) {
-      if (m.sender == MessageSender.ai) {
-        final raw = m.extra?['files_changed'] ??
-            m.extra?['trace_summary']?['files_changed'];
-        final list =
-            (raw as List?)?.whereType<Map<dynamic, dynamic>>().toList() ?? [];
-        for (final item in list) {
-          final f = Map<String, dynamic>.from(item);
-          final path = f['path'] as String? ?? '';
-          if (path.isNotEmpty) {
-            fileMap[path] = f;
-          }
-        }
-      }
-    }
-    return fileMap.values.toList();
-  }
-
-  /// 获取与指定用户消息对应的助手消息（或正在生成的占位消息）
-  ChatMessage? getAssistantMessageForUser(String userMsgId) {
-    final asstId = _assistantMsgId(userMsgId);
-    final typingId = '${userMsgId}_typing';
-    final target = _messages.where((m) => m.id == asstId || m.id == typingId);
-    if (target.isNotEmpty) return target.first;
-
-    final userIdx = _messages.indexWhere((m) => m.id == userMsgId);
-    if (userIdx != -1 && userIdx + 1 < _messages.length) {
-      final next = _messages[userIdx + 1];
-      if (next.sender == MessageSender.ai) return next;
-    }
-    return null;
-  }
-
-  /// 获取本轮对话关联的所有消息 ID（包括用户提问、附件、助手回复及 typing 占位）
-  Set<String> getTurnMessageIds(String userMsgId) {
-    final ids = <String>{
-      userMsgId,
-      '${userMsgId}_att',
-      '${userMsgId}_typing',
-      _assistantMsgId(userMsgId),
-    };
-    final asst = getAssistantMessageForUser(userMsgId);
-    if (asst != null) ids.add(asst.id);
-    return ids;
-  }
+  // ── 通信底层 ──────────────────────────────────────────────────────────
 
   void _onError(Object error) {
     debugPrint('[WS] 错误: $error');
@@ -1454,7 +511,6 @@ class WsService extends ChangeNotifier {
   }
 
   void _handleDisconnect() {
-    // 断线收口：先清 UI 占位，再释放 pending/completer，最后触发重连。
     _messages.removeWhere((m) => m.isTyping);
     _streamingMsgIds.clear();
     _pendingResponses.forEach((_, completer) {
@@ -1482,7 +538,6 @@ class WsService extends ChangeNotifier {
   }
 
   void _sendHandshake() {
-    // 连接建立后先发 CONNECT，向 Host 声明客户端能力与访问密钥。
     _send({
       'message_id': _genId(),
       'type': 'CONNECT',
@@ -1499,7 +554,6 @@ class WsService extends ChangeNotifier {
   }
 
   void _startPing() {
-    // 心跳仅用于保活与探活，PONG 不参与业务状态更新。
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(_pingInterval, (_) {
       _send({
@@ -1552,163 +606,12 @@ class WsService extends ChangeNotifier {
     }
   }
 
-  // ── 记忆系统 API ───────────────────────────────────────────────────────
-
-  /// 获取指定人格的记忆列表
-  Future<List<Map<String, dynamic>>> getMemories({
-    String? personaId,
-    String? category,
-  }) async {
-    final payload = <String, dynamic>{
-      'persona_id': personaId ?? _activePersonaId,
-    };
-    if (category != null) {
-      payload['category'] = category;
-    }
-    final resp = await sendRequest('MEMORY_LIST', payload);
-    if (resp == null) return [];
-    final list = resp['payload']?['memories'] as List<dynamic>? ?? [];
-    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-  }
-
-  /// 手动录入一条记忆
-  Future<bool> addMemory({
-    String? personaId,
-    required String category,
-    required String content,
-  }) async {
-    final resp = await sendRequest('MEMORY_ADD', {
-      'persona_id': personaId ?? _activePersonaId,
-      'category': category,
-      'content': content.trim(),
-    });
-    return resp?['payload']?['status'] == 'success';
-  }
-
-  /// 删除指定记忆
-  Future<bool> deleteMemory(dynamic memoryId) async {
-    final resp = await sendRequest('MEMORY_DELETE', {
-      'memory_id': memoryId,
-    });
-    return resp?['payload']?['status'] == 'success';
-  }
-
-  /// 清空当前人格的所有记忆
-  Future<int> clearMemories([String? personaId]) async {
-    final resp = await sendRequest('MEMORY_CLEAR', {
-      'persona_id': personaId ?? _activePersonaId,
-    });
-    if (resp?['payload']?['status'] == 'success') {
-      return (resp!['payload']['cleared_count'] as num?)?.toInt() ?? 0;
-    }
-    return 0;
-  }
-
-  // ── 技能系统 API ───────────────────────────────────────────────────────
-
-  /// 获取已安装的技能列表
-  Future<List<Map<String, dynamic>>> getSkills() async {
-    final resp = await sendRequest('SKILL_LIST', {});
-    if (resp == null) return [];
-    final list = resp['payload']?['skills'] as List<dynamic>? ?? [];
-    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-  }
-
-  /// 从 Git 仓库安装技能
-  Future<bool> installSkill(String gitUrl) async {
-    final resp = await sendRequest('SKILL_INSTALL', {
-      'git_url': gitUrl.trim(),
-    }, timeout: const Duration(seconds: 45));
-    return resp?['payload']?['status'] == 'success';
-  }
-
-  /// 卸载指定技能
-  Future<bool> uninstallSkill(String skillName) async {
-    final resp = await sendRequest('SKILL_UNINSTALL', {
-      'skill_name': skillName.trim(),
-    });
-    return resp?['payload']?['status'] == 'success';
-  }
-
-  // ── 模型配置管理与快速切换 API ───────────────────────────────────────
-
-  /// 从 Host 获取模型列表与当前激活模型
-  Future<void> fetchLlmConfig() async {
-    final resp = await sendRequest('LLM_CONFIG_GET', {});
-    if (resp != null) {
-      final payload = resp['payload'] as Map<String, dynamic>? ?? {};
-      _activeModelId = (payload['active_model_id'] as String?) ?? 'default';
-      if (payload['reasoning_effort'] != null) {
-        _reasoningEffort = (payload['reasoning_effort'] as String).toLowerCase();
-      }
-      final list = payload['models'] as List<dynamic>? ?? [];
-      _configuredModels = list.map((m) => Map<String, dynamic>.from(m as Map)).toList();
-
-      final active = _configuredModels.firstWhere(
-        (m) => m['id'] == _activeModelId,
-        orElse: () => _configuredModels.isNotEmpty ? _configuredModels.first : <String, dynamic>{},
-      );
-      _activeModelName = (active['name'] as String?) ?? (active['model'] as String?) ?? '';
-      notifyListeners();
-    }
-  }
-
-  /// 快速切换当前生效模型
-  Future<bool> switchModel(String modelId) async {
-    final resp = await sendRequest('LLM_SWITCH_MODEL', {'model_id': modelId});
-    if (resp != null && resp['payload']?['status'] == 'success') {
-      _activeModelId = modelId;
-      final payload = resp['payload'] as Map<String, dynamic>? ?? {};
-      _activeModelName = (payload['name'] as String?) ?? (payload['model'] as String?) ?? _activeModelName;
-      if (payload['reasoning_effort'] != null) {
-        _reasoningEffort = (payload['reasoning_effort'] as String).toLowerCase();
-      }
-      notifyListeners();
-      return true;
-    }
-    return false;
-  }
-
-  /// 快速切换思考/推理等级 (low / medium / high)
-  Future<bool> setReasoningEffort(String level) async {
-    final clean = level.trim().toLowerCase();
-    if (!['low', 'medium', 'high'].contains(clean)) return false;
-    _reasoningEffort = clean;
-    notifyListeners();
-    final resp = await sendRequest('LLM_SET_THINKING_LEVEL', {'level': clean});
-    return resp != null && resp['payload']?['status'] == 'success';
-  }
-
-  /// 保存或添加模型 Profile
-  Future<bool> saveModelProfile(Map<String, dynamic> modelData, {bool setActive = false}) async {
-    final resp = await sendRequest('LLM_MODEL_SAVE', {
-      'model': modelData,
-      'set_active': setActive,
-    });
-    if (resp != null && resp['payload']?['status'] == 'success') {
-      await fetchLlmConfig();
-      return true;
-    }
-    return false;
-  }
-
-  /// 删除模型 Profile
-  Future<bool> deleteModelProfile(String modelId) async {
-    final resp = await sendRequest('LLM_MODEL_DELETE', {'model_id': modelId});
-    if (resp != null && resp['payload']?['status'] == 'success') {
-      await fetchLlmConfig();
-      return true;
-    }
-    return false;
-  }
-
   void _setStatus(WsStatus s) {
     _status = s;
     notifyListeners();
   }
 
   String _genId() =>
-      // 轻量本地 id：用于请求-响应关联，不用于安全场景。
       Random().nextInt(0xFFFFFF).toRadixString(16).padLeft(6, '0');
 
   @override
