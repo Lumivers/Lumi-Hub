@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from ..tools import (
+from ..native_tools import (
     delete_file as native_delete_file,
     find_symbol as native_find_symbol,
     get_file_size as native_get_file_size,

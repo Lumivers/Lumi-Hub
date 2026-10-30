@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 
 from ..agent_loop import AgentLoop
-from ..tools import revert_file as native_revert_file
+from ..native_tools import revert_file as native_revert_file
 
 logger = logging.getLogger("lumi")
 

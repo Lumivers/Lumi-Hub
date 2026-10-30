@@ -1,6 +1,6 @@
 # 🌟 Lumi-Hub: 跨平台私有化 Agent 交互终端与独立运行环境
 
-Lumi-Hub 是专为大模型 Agent 打造的私有化、跨平台桌面/移动端交互枢纽。2.0 版本已全面脱钩第三方框架，内置**完全独立的 Python Agent Runtime**，并提供多任务并行、Skill 工作流、长短期记忆、**离线 Live2D 拟人化双形态展台与桌面桌宠挂件**能力。
+Lumi-Hub 是专为大模型 Agent 打造的私有化、跨平台桌面/移动端交互枢纽。2.0 版本已内置**完全独立的 Python Agent Runtime**，并提供多任务并行、Skill 工作流、长短期记忆、**离线 Live2D 拟人化双形态展台与桌面桌宠挂件**能力。
 
 [![GitHub](https://img.shields.io/badge/GitHub-Lumivers%2FLumi--Hub-blue?logo=github)](https://github.com/Lumivers/Lumi-Hub)
 [![Flutter](https://img.shields.io/badge/Flutter-v3.29+-02569B?logo=flutter)](https://flutter.dev)
