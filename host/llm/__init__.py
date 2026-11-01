@@ -59,11 +59,12 @@ def create_provider(data_dir: str = None, provider_type: str = None, **kwargs) -
 
     if ptype == "anthropic":
         api_key = _get("api_key", "LUMI_LLM_API_KEY", "")
+        base_url = _get("base_url", "LUMI_LLM_BASE_URL")
         default_model = _get("model", "LUMI_LLM_MODEL", "claude-3-7-sonnet-20250219")
         if not api_key:
             logger.warning("[LLM] Anthropic API Key 未配置，LLM 调用将失败")
-        provider = AnthropicProvider(api_key=api_key, default_model=default_model)
-        logger.info(f"[LLM] 使用 Anthropic Provider (model={default_model})")
+        provider = AnthropicProvider(api_key=api_key, base_url=base_url, default_model=default_model)
+        logger.info(f"[LLM] 使用 Anthropic Provider (model={default_model}, base_url={base_url})")
         return provider
 
     elif ptype == "ollama":

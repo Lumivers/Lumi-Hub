@@ -23,16 +23,21 @@ class AnthropicProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: str,
+        base_url: Optional[str] = None,
         default_model: str = "claude-sonnet-4-20250514",
     ):
         self._api_key = api_key
+        self._base_url = base_url
         self._default_model = default_model
         self._client = None
 
     def _get_client(self):
         if self._client is None:
             from anthropic import AsyncAnthropic
-            self._client = AsyncAnthropic(api_key=self._api_key)
+            self._client = AsyncAnthropic(
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
         return self._client
 
     def get_default_model(self) -> str:
@@ -80,7 +85,6 @@ class AnthropicProvider(BaseLLMProvider):
         kwargs = {
             "model": use_model,
             "messages": api_messages,
-            "stream": True,
         }
 
         # Claude 3.7+ 显式支持 thinking

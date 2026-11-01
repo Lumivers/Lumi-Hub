@@ -1,0 +1,3 @@
+# 避免 Flutter 构建时自动生成的插件注册文件因为换行符（LF/CRLF）在 Windows/Linux 间反复触发 Git 变更
+client/linux/flutter/generated_* text eol=lf
+client/windows/flutter/generated_* text eol=lf
