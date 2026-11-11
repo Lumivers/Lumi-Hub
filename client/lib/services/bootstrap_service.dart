@@ -136,9 +136,15 @@ class BootstrapService extends ChangeNotifier {
     final host = (uri?.host.isNotEmpty ?? false) ? uri!.host : '127.0.0.1';
     final port = (uri?.hasPort ?? false) ? uri!.port : 8765;
     final isLocal = host == '127.0.0.1' || host == 'localhost';
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-    // 1. 如果是连接本地 Host，先探活；未通则自动拉起伴生进程
+    // 1. 如果是连接本地 Host，先探活；未通则自动拉起伴生进程 (移动端跳过拉起内核)
     if (isLocal) {
+      if (isMobile) {
+        _log('检测到处于移动端环境，且服务器地址为本地 ($host)。请配置电脑宿主机的局域网 IP 地址。', level: LogLevel.warning);
+        _fail('移动端需连接电脑主机的 Host 服务。\n请点击下方“配置服务地址”输入电脑局域网 IP (如 ws://192.168.x.x:$port)。');
+        return;
+      }
       final alreadyRunning = await _isPortOpen(host, port);
       if (alreadyRunning) {
         _log('检测到本地 Host 服务已在运行 (端口 $port)，直接复用。');
@@ -151,6 +157,8 @@ class BootstrapService extends ChangeNotifier {
           return;
         }
       }
+    } else if (isMobile) {
+      _log('移动端准备连接远程 Host: ${_ws.serverUrl}');
     }
 
     // 2. 建立 WebSocket 连接
@@ -161,7 +169,11 @@ class BootstrapService extends ChangeNotifier {
 
     final wsConnected = await _waitWsConnected(const Duration(seconds: 15));
     if (!wsConnected) {
-      _fail('无法连接到 Host (${_ws.serverUrl})。请确认 Host 已正常启动。');
+      if (isMobile) {
+        _fail('无法连接到 Host (${_ws.serverUrl})。\n请确认电脑端 Host 已启动，且手机与电脑连接同一 Wi-Fi 局域网。');
+      } else {
+        _fail('无法连接到 Host (${_ws.serverUrl})。请确认 Host 已正常启动。');
+      }
       return;
     }
 

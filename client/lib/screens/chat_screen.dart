@@ -929,31 +929,37 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         Divider(height: 1, color: colors.divider),
         Expanded(
-          child: _MessageList(
-            messages: ws.messages,
-            activePersonaId: ws.activePersonaId,
-            scroll: _scroll,
-            colors: colors,
-            onDeleteMessage: (msgId) {
-              unawaited(_confirmDeleteMessages(ws, {msgId}));
-            },
-            onRecallMessage: (msg) {
-              unawaited(_handleRecallMessage(ws, msg));
-            },
-            onRewindToHere: (msg) {
-              unawaited(_handleRewindToHere(ws, msg));
-            },
-            enableAiVoiceOutput: settings.enableAiVoiceOutput,
-            ttsReadyMessageIds: _ttsReadyMessageIds,
-            ttsGeneratingMessageIds: _ttsGeneratingMessageIds,
-            playingTtsMessageId: ws.playingTtsTurnId,
-            isTtsPlaying: ws.isTtsPlaying,
-            onReadAloudTap: (msg) => _onReadAloudTap(ws, msg),
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => FocusScope.of(context).unfocus(),
+            child: _MessageList(
+              messages: ws.messages,
+              activePersonaId: ws.activePersonaId,
+              scroll: _scroll,
+              colors: colors,
+              onDeleteMessage: (msgId) {
+                unawaited(_confirmDeleteMessages(ws, {msgId}));
+              },
+              onRecallMessage: (msg) {
+                unawaited(_handleRecallMessage(ws, msg));
+              },
+              onRewindToHere: (msg) {
+                unawaited(_handleRewindToHere(ws, msg));
+              },
+              enableAiVoiceOutput: settings.enableAiVoiceOutput,
+              ttsReadyMessageIds: _ttsReadyMessageIds,
+              ttsGeneratingMessageIds: _ttsGeneratingMessageIds,
+              playingTtsMessageId: ws.playingTtsTurnId,
+              isTtsPlaying: ws.isTtsPlaying,
+              onReadAloudTap: (msg) => _onReadAloudTap(ws, msg),
+            ),
           ),
         ),
         Divider(height: 1, color: colors.divider),
-        Column(
-          mainAxisSize: MainAxisSize.min,
+        SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
           children: [
             if (_pendingFileName != null)
               Padding(
@@ -1092,8 +1098,9 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
-      ],
-    );
+      ),
+    ],
+  );
 
     return Scaffold(
       drawer: isCompact

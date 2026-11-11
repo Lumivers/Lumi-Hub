@@ -217,39 +217,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   }
 
   Future<void> _editServerUrl(BuildContext context) async {
-    final ws = context.read<WsService>();
-    final ctrl = TextEditingController(text: ws.serverUrl);
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('修改 Host 服务地址'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'WebSocket 地址',
-            hintText: 'ws://127.0.0.1:8765',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final val = ctrl.text.trim();
-              if (val.isNotEmpty) {
-                await ws.setServerUrl(val, reconnectIfConnected: true);
-              }
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('保存并重连'),
-          ),
-        ],
-      ),
-    );
+    await _showEditServerUrlDialog(context);
   }
 
   // ── 构建 UI ──
@@ -941,16 +909,22 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
                   children: [
                     FilledButton.icon(
                       onPressed: bootstrap.retry,
                       icon: const Icon(Icons.refresh),
                       label: const Text('重试连接'),
                     ),
-                    const SizedBox(width: 12),
                     OutlinedButton.icon(
+                      onPressed: () => _showEditServerUrlDialog(context),
+                      icon: const Icon(Icons.settings_ethernet),
+                      label: const Text('配置服务地址'),
+                    ),
+                    TextButton.icon(
                       onPressed: bootstrap.enterOfflineMode,
                       icon: const Icon(Icons.arrow_forward),
                       label: const Text('跳过，直接进入'),
@@ -981,5 +955,55 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
         return '启动失败';
     }
   }
+}
+
+Future<void> _showEditServerUrlDialog(BuildContext context) async {
+  final ws = context.read<WsService>();
+  final ctrl = TextEditingController(text: ws.serverUrl);
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('修改 Host 服务地址'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '移动端连接请填写电脑主机的局域网 IP:\n(如 ws://192.168.1.100:8765)',
+            style: TextStyle(fontSize: 12.5),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'WebSocket 地址',
+              hintText: 'ws://192.168.x.x:8765',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () async {
+            final val = ctrl.text.trim();
+            if (val.isNotEmpty) {
+              await ws.setServerUrl(val, reconnectIfConnected: true);
+              if (context.mounted) {
+                unawaited(context.read<BootstrapService>().retry());
+              }
+            }
+            if (ctx.mounted) Navigator.pop(ctx);
+          },
+          child: const Text('保存并重试'),
+        ),
+      ],
+    ),
+  );
 }
 

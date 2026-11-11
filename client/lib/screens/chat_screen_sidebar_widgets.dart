@@ -220,8 +220,7 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
             ),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 240),
+            Flexible(
               child: Text(
                 sessionTitle,
                 maxLines: 1,
@@ -233,6 +232,7 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(width: 8),
 
             const Spacer(),
 
